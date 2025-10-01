@@ -2,10 +2,15 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
-# -----------------------------
-# Embedded Report JSON
-# -----------------------------
-REPORT = {
+# ------------------------------
+# Page Configuration
+# ------------------------------
+st.set_page_config(page_title="AI Report", layout="wide")
+
+# ------------------------------
+# Embedded Report Data (from JSON input)
+# ------------------------------
+report = {
     "valid": True,
     "issues": [],
     "summary": [
@@ -80,147 +85,156 @@ REPORT = {
     }
 }
 
+# ------------------------------
+# Helpers
+# ------------------------------
+def load_primary_dataframe(report_dict: dict) -> pd.DataFrame:
+    """Convert the first table in the report to a typed pandas DataFrame."""
+    if not report_dict.get("tables"):
+        return pd.DataFrame()
 
-def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    for col in df.columns:
-        # Try to convert everything except likely categorical text columns
-        if df[col].dtype == object and col.lower() not in {"brand"}:
+    table = report_dict["tables"][0]
+    df = pd.DataFrame(table["rows"], columns=table["columns"])
+
+    # Convert numeric columns to appropriate dtypes
+    numeric_cols = [
+        "total_users",
+        "total_units_sold",
+        "total_purchased_amount",
+        "total_sales_amount",
+        "total_receipts",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Add derived metrics (optional, useful for tooltips)
+    if "total_sales_amount" in df.columns and df["total_sales_amount"].sum() > 0:
+        df["sales_share"] = df["total_sales_amount"] / df["total_sales_amount"].sum()
+    else:
+        df["sales_share"] = 0.0
+
     return df
 
 
-def build_tables(report: dict) -> list[tuple[str, pd.DataFrame]]:
-    tables_out = []
-    for t in report.get("tables", []):
-        name = t.get("name") or "Table"
-        cols = t.get("columns", [])
-        rows = t.get("rows", [])
-        df = pd.DataFrame(rows, columns=cols)
-        df = _coerce_numeric(df)
-        tables_out.append((name, df))
-    return tables_out
+def render_summary(summary_list):
+    st.subheader("Summary")
+    if not summary_list:
+        st.info("No summary available.")
+        return
+    for item in summary_list:
+        st.markdown(f"- {item}")
 
 
-def pie_chart(df: pd.DataFrame, x_key: str, y_key: str, title: str | None = None) -> alt.Chart:
-    chart = (
-        alt.Chart(df)
-        .mark_arc(outerRadius=150)
-        .encode(
-            theta=alt.Theta(field=y_key, type="quantitative"),
-            color=alt.Color(field=x_key, type="nominal", legend=alt.Legend(title=x_key)),
-            tooltip=[
-                alt.Tooltip(field=x_key, type="nominal", title=x_key),
-                alt.Tooltip(field=y_key, type="quantitative", title=y_key, format=",.2f"),
-            ],
-        )
-    )
-    if title:
-        chart = chart.properties(title=title)
-    return chart
-
-
-def bar_chart(df: pd.DataFrame, x_key: str, y_key: str, title: str | None = None) -> alt.Chart:
-    chart = (
-        alt.Chart(df)
-        .mark_bar()
-        .encode(
-            x=alt.X(f"{x_key}:N", sort="-y", title=x_key),
-            y=alt.Y(f"{y_key}:Q", title=y_key),
-            color=alt.Color(f"{x_key}:N", legend=None),
-            tooltip=[
-                alt.Tooltip(field=x_key, type="nominal", title=x_key),
-                alt.Tooltip(field=y_key, type="quantitative", title=y_key, format=",.2f"),
-            ],
-        )
-    )
-    if title:
-        chart = chart.properties(title=title)
-    return chart
-
-
-def render_charts(report: dict, tables: list[tuple[str, pd.DataFrame]]):
-    if not report.get("charts"):
-        st.info("No charts available in the report.")
+def render_tables(report_dict: dict, df: pd.DataFrame):
+    st.subheader("Tables")
+    if not report_dict.get("tables"):
+        st.info("No tables available.")
         return
 
-    # Use the first table as the default data source for charts
-    if not tables:
-        st.warning("No table data available to render charts.")
-        return
-    _, df0 = tables[0]
+    for table in report_dict["tables"]:
+        name = table.get("name", "Table")
+        st.markdown(f"**{name}**")
+        # Build DF again to preserve column order in display
+        display_df = pd.DataFrame(table["rows"], columns=table["columns"])
+        # Apply consistent typing as with primary df
+        for col in [
+            "total_users",
+            "total_units_sold",
+            "total_purchased_amount",
+            "total_sales_amount",
+            "total_receipts",
+        ]:
+            if col in display_df.columns:
+                display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
 
-    st.header("Charts")
-    for ch in report.get("charts", []):
-        ch_id = ch.get("id", "chart")
-        ch_type = ch.get("type", "")
-        spec = ch.get("spec", {})
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Brand": st.column_config.TextColumn("Brand"),
+                "total_users": st.column_config.NumberColumn("Total Users", format="%d"),
+                "total_units_sold": st.column_config.NumberColumn("Total Units Sold", format="%d"),
+                "total_purchased_amount": st.column_config.NumberColumn("Total Purchased Amount", format="%.2f"),
+                "total_sales_amount": st.column_config.NumberColumn("Total Sales Amount", format="%.2f"),
+                "total_receipts": st.column_config.NumberColumn("Total Receipts", format="%d"),
+            },
+        )
+
+
+def render_charts(report_dict: dict, df: pd.DataFrame):
+    st.subheader("Charts")
+    if df.empty:
+        st.info("No data available to render charts.")
+        return
+
+    if not report_dict.get("charts"):
+        st.info("No charts present in the report.")
+        return
+
+    for chart in report_dict["charts"]:
+        chart_type = chart.get("type")
+        spec = chart.get("spec", {})
         x_key = spec.get("xKey")
-        # yKey may be directly in spec or nested inside first series
         y_key = spec.get("yKey")
-        series = spec.get("series", [])
-        series_name = None
-        if not y_key and series:
-            y_key = series[0].get("yKey")
-        if series:
-            series_name = series[0].get("name")
 
-        if not x_key or not y_key:
-            st.warning(f"Chart '{ch_id}' missing xKey or yKey; skipping.")
-            continue
+        if chart_type == "pie" and x_key in df.columns and y_key in df.columns:
+            st.markdown("**Total Sales Amount by Brand (Pie Chart)**")
+            pie = (
+                alt.Chart(df)
+                .mark_arc(outerRadius=130, innerRadius=40)
+                .encode(
+                    theta=alt.Theta(field=y_key, type="quantitative"),
+                    color=alt.Color(field=x_key, type="nominal", legend=alt.Legend(title="Brand")),
+                    tooltip=[
+                        alt.Tooltip(x_key, title="Brand"),
+                        alt.Tooltip(y_key, title="Total Sales Amount", format=",.2f"),
+                        alt.Tooltip("sales_share", title="Sales Share", format=".1%"),
+                    ],
+                )
+            )
+            st.altair_chart(pie, use_container_width=True)
 
-        title = None
-        if series_name:
-            title = f"{series_name} by {x_key}"
+        elif chart_type == "bar" and x_key in df.columns and y_key in df.columns:
+            st.markdown("**Total Units Sold by Brand (Bar Chart)**")
+            bar = (
+                alt.Chart(df)
+                .mark_bar()
+                .encode(
+                    x=alt.X(f"{x_key}:N", sort="-y", title="Brand"),
+                    y=alt.Y(f"{y_key}:Q", title="Total Units Sold"),
+                    tooltip=[
+                        alt.Tooltip(x_key, title="Brand"),
+                        alt.Tooltip(y_key, title="Total Units Sold", format=",d"),
+                    ],
+                    color=alt.Color(f"{x_key}:N", legend=None),
+                )
+            )
+            st.altair_chart(bar, use_container_width=True)
         else:
-            title = f"{y_key} by {x_key}"
-
-        # Ensure the required columns are present and numeric where needed
-        if x_key not in df0.columns or y_key not in df0.columns:
-            st.warning(f"Chart '{ch_id}': required columns not found in data; skipping.")
-            continue
-
-        # Build and render the Altair chart
-        if ch_type.lower() == "pie":
-            chart = pie_chart(df0, x_key, y_key, title=title)
-        elif ch_type.lower() == "bar":
-            chart = bar_chart(df0, x_key, y_key, title=title)
-        else:
-            st.warning(f"Chart '{ch_id}': unsupported chart type '{ch_type}'.")
-            continue
-
-        st.altair_chart(chart, use_container_width=True)
+            st.warning(
+                f"Chart with id '{chart.get('id', 'unknown')}' could not be rendered due to missing keys or unsupported type."
+            )
 
 
-def main():
-    st.set_page_config(page_title="AI Report App", layout="wide")
-    st.title("AI Report Viewer")
+# ------------------------------
+# App Layout
+# ------------------------------
+st.title("AI Report")
 
-    # Summary
-    st.header("Summary")
-    if REPORT.get("summary"):
-        bullets = "\n".join([f"- {item}" for item in REPORT["summary"]])
-        st.markdown(bullets)
-    else:
-        st.info("No summary provided.")
+# Summary
+render_summary(report.get("summary", []))
 
-    # Tables
-    st.header("Tables")
-    tables = build_tables(REPORT)
-    if not tables:
-        st.info("No tables available in the report.")
-    else:
-        for name, df in tables:
-            st.subheader(name)
-            st.dataframe(df, use_container_width=True)
+# Data
+df_primary = load_primary_dataframe(report)
 
-    # Charts
-    render_charts(REPORT, tables)
+# Tables
+render_tables(report, df_primary)
 
-    # Optional: Show raw JSON in an expander for transparency/debugging
-    with st.expander("Show raw report JSON"):
-        st.json(REPORT)
+# Charts
+render_charts(report, df_primary)
 
-
-if __name__ == "__main__":
-    main()
+# Optional: Raw data for reference
+with st.expander("Show raw report JSON"):
+    st.json(report)

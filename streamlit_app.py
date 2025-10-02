@@ -2,231 +2,240 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import json
-from typing import Dict, Any, List
+from typing import List, Dict, Any
 
-# ---------------------------------------------
-# AI Report App - Auto-generated Streamlit app
-# ---------------------------------------------
-# This app renders the provided JSON report:
-#  - Displays summary in markdown
-#  - Renders all tables with st.dataframe
-#  - Renders all charts with Altair
-#
-# Libraries used: streamlit, pandas, altair
-# ---------------------------------------------
-
-st.set_page_config(page_title="AI Report Dashboard", page_icon="📊", layout="wide")
-
-# Embed the provided JSON report directly in the app
-def load_report() -> Dict[str, Any]:
-    report = {
-        "valid": True,
-        "issues": [],
-        "summary": [
-            "No change in registered users or total sales between 2025 Q1 and 2025 Q2.",
-            "Registered users: 36,831; Total sales: 1,843,315.89 in both quarters."
-        ],
-        "tables": [
-            {
-                "name": "Table",
-                "columns": ["period", "registered_users", "total_sales"],
-                "rows": [
-                    ["2025 Q2", "36831", "1843315.8899999924"],
-                    ["2025 Q1", "36831", "1843315.8899999924"]
+# -------------------------------
+# Embedded report JSON
+# -------------------------------
+json_report = {
+    "valid": True,
+    "issues": [],
+    "summary": [
+        "Registered users and total sales in 2025 Q2 are exactly the same as in 2025 Q1.",
+        "No improvement or decline observed between Q1 and Q2 2025."
+    ],
+    "tables": [
+        {
+            "name": "Table",
+            "columns": ["period", "registered_users", "total_sales"],
+            "rows": [
+                ["2025 Q2", "36831", "1843315.8899999924"],
+                ["2025 Q1", "36831", "1843315.8899999924"]
+            ]
+        }
+    ],
+    "charts": [
+        {
+            "id": "main",
+            "type": "kpi",
+            "spec": {
+                "xKey": "period",
+                "yKey": "total_sales",
+                "series": [
+                    {"name": "Total Sales", "yKey": "total_sales"}
                 ]
             }
-        ],
-        "charts": [
-            {
-                "id": "main",
-                "type": "kpi",
-                "spec": {
-                    "xKey": "period",
-                    "yKey": "total_sales",
-                    "series": [
-                        {"name": "Total Sales", "yKey": "total_sales"}
-                    ]
-                }
-            },
-            {
-                "id": "main_2",
-                "type": "kpi",
-                "spec": {
-                    "xKey": "period",
-                    "yKey": "registered_users",
-                    "series": [
-                        {"name": "Registered Users", "yKey": "registered_users"}
-                    ]
-                }
+        },
+        {
+            "id": "main_2",
+            "type": "kpi",
+            "spec": {
+                "xKey": "period",
+                "yKey": "registered_users",
+                "series": [
+                    {"name": "Registered Users", "yKey": "registered_users"}
+                ]
             }
-        ],
-        "echo": {
-            "intent": "comparison_totals",
-            "used": {
-                "tables": ["Haleon_Rewards_User_Performance_110925_list"],
-                "columns": ["user_id", "Total Sales"]
-            },
-            "stats": {"elapsed": 0.021348218},
-            "sql_present": True
         }
+    ],
+    "echo": {
+        "intent": "comparison_totals",
+        "used": {"tables": ["Haleon_Rewards_User_Performance_110925_list"], "columns": ["user_id", "Total Sales"]},
+        "stats": {"elapsed": 0},
+        "sql_present": True
     }
-    return report
+}
+
+# -------------------------------
+# Streamlit App
+# -------------------------------
+
+def _coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for col in df.columns:
+        # Try numeric conversion; leave as-is if fails
+        converted = pd.to_numeric(df[col], errors="ignore")
+        df[col] = converted
+    return df
 
 
-def build_dataframes(report: Dict[str, Any]) -> Dict[str, pd.DataFrame]:
-    dfs: Dict[str, pd.DataFrame] = {}
-    for tbl in report.get("tables", []):
-        name = tbl.get("name", "Table")
-        cols = tbl.get("columns", [])
-        rows = tbl.get("rows", [])
-        df = pd.DataFrame(rows, columns=cols)
-        # Coerce numerics where appropriate
-        for c in df.columns:
-            # Try to convert to numeric when possible (without raising)
-            if c.lower() in ["registered_users", "total_sales", "value", "amount", "count"]:
-                df[c] = pd.to_numeric(df[c], errors='ignore')
-        dfs[name] = df
-    return dfs
+def _format_for_dtype(series: pd.Series) -> str:
+    # Choose a number format based on dtype
+    if pd.api.types.is_integer_dtype(series):
+        return ",d"
+    if pd.api.types.is_float_dtype(series):
+        return ",.2f"
+    return ""
 
 
-def format_big_number(x: float) -> str:
-    try:
-        return f"{x:,.2f}"
-    except Exception:
-        return str(x)
+def _find_chart_dataframe(x_key: str, y_keys: List[str], tables: List[Dict[str, Any]]):
+    # Find first table that contains x_key and all y_keys
+    for t in tables:
+        df = t["df"]
+        cols = set(df.columns)
+        if x_key in cols and all(y in cols for y in y_keys):
+            return t
+    return None
 
 
-def render_summary(summary_items: List[str]) -> None:
-    st.subheader("Summary")
-    if not summary_items:
-        st.info("No summary provided.")
-        return
-    for item in summary_items:
-        st.markdown(f"- {item}")
+def _build_chart(chart_def: Dict[str, Any], tables: List[Dict[str, Any]]):
+    ctype = (chart_def.get("type") or "").lower()
+    spec = chart_def.get("spec", {})
+    x_key = spec.get("xKey")
 
+    # Gather series and y-keys
+    series_list = spec.get("series", []) or []
+    y_key_from_root = spec.get("yKey")
+    y_keys = [s.get("yKey") for s in series_list if s.get("yKey")]
+    if not y_keys and y_key_from_root:
+        y_keys = [y_key_from_root]
+        # fallback name
+        series_list = [{"name": y_key_from_root, "yKey": y_key_from_root}]
 
-def chart_from_kpi(df: pd.DataFrame, x_key: str, y_key: str, title: str) -> alt.Chart:
-    # Ensure dtype
-    dff = df.copy()
-    if y_key in dff.columns:
-        dff[y_key] = pd.to_numeric(dff[y_key], errors='coerce')
-    # Build a bar chart with labels for KPI-style summary per period
-    base = alt.Chart(dff)
-    bar = base.mark_bar(color="#4C78A8").encode(
-        x=alt.X(f"{x_key}:N", title=x_key.replace("_", " ").title()),
-        y=alt.Y(
-            f"{y_key}:Q",
-            title=y_key.replace("_", " ").title(),
-            axis=alt.Axis(format=",")
-        ),
-        tooltip=[x_key, alt.Tooltip(y_key, format=",")]
-    )
-    text = base.mark_text(dy=-6, color="#333", fontWeight="bold").encode(
-        x=alt.X(f"{x_key}:N"),
-        y=alt.Y(f"{y_key}:Q"),
-        text=alt.Text(f"{y_key}:Q", format=",")
-    )
-    chart = (bar + text).properties(title=title).configure_title(anchor='start')
-    return chart
-
-
-def render_charts(report: Dict[str, Any], dfs: Dict[str, pd.DataFrame]) -> None:
-    st.subheader("Charts")
-    charts = report.get("charts", [])
-    if not charts:
-        st.info("No charts available.")
+    if not x_key or not y_keys:
+        st.warning(f"Chart {chart_def.get('id', '')}: Missing xKey or yKey in spec.")
         return
 
-    # Use the first table as the default data source for charts unless specified
-    default_df = next(iter(dfs.values())) if dfs else pd.DataFrame()
+    tmatch = _find_chart_dataframe(x_key, y_keys, tables)
+    if tmatch is None:
+        st.warning(f"Chart {chart_def.get('id', '')}: No table found containing required keys: {x_key}, {', '.join(y_keys)}")
+        return
 
-    for ch in charts:
-        ch_type = ch.get("type", "bar")
-        spec = ch.get("spec", {})
-        x_key = spec.get("xKey")
-        y_key = spec.get("yKey")
-        series = spec.get("series", [])
-        title = series[0].get("name") if series and isinstance(series, list) and isinstance(series[0], dict) else (y_key or "Chart")
+    df = tmatch["df"].copy()
 
-        df = default_df.copy()
-        if df.empty or not x_key or not y_key or x_key not in df.columns or y_key not in df.columns:
-            st.warning(f"Skipping chart '{ch.get('id', '')}' due to missing data or keys.")
-            continue
+    # Altair settings
+    alt.data_transformers.disable_max_rows()
 
-        if ch_type.lower() == "kpi":
-            chart = chart_from_kpi(df, x_key, y_key, title)
-        elif ch_type.lower() in ("bar", "column"):
-            chart = alt.Chart(df).mark_bar().encode(
-                x=alt.X(f"{x_key}:N", title=x_key),
-                y=alt.Y(f"{y_key}:Q", title=y_key, axis=alt.Axis(format=",")),
-                tooltip=[x_key, alt.Tooltip(y_key, format=",")]
-            ).properties(title=title)
-        elif ch_type.lower() == "line":
-            chart = alt.Chart(df).mark_line(point=True).encode(
-                x=alt.X(f"{x_key}:N", title=x_key),
-                y=alt.Y(f"{y_key}:Q", title=y_key, axis=alt.Axis(format=",")),
-                tooltip=[x_key, alt.Tooltip(y_key, format=",")]
-            ).properties(title=title)
-        elif ch_type.lower() == "pie":
-            chart = alt.Chart(df).mark_arc().encode(
-                theta=alt.Theta(f"{y_key}:Q", stack=True),
-                color=alt.Color(f"{x_key}:N"),
-                tooltip=[x_key, alt.Tooltip(y_key, format=",")]
-            ).properties(title=title)
-        else:
-            # Fallback to bar
-            chart = chart_from_kpi(df, x_key, y_key, title)
+    # Single-series vs multi-series
+    if len(y_keys) == 1:
+        y_key = y_keys[0]
+        title = series_list[0].get("name") or y_key
+        # Keep order as in table (no sorting) to respect report ordering
+        plot_df = df[[x_key, y_key]].copy()
+        numfmt = _format_for_dtype(plot_df[y_key])
 
+        # Choose a sensible default for KPI: bar with value labels
+        base = alt.Chart(plot_df)
+        bar = base.mark_bar(size=50, cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+            x=alt.X(f"{x_key}:N", sort=None, title=x_key),
+            y=alt.Y(f"{y_key}:Q", title=title),
+            tooltip=[alt.Tooltip(f"{x_key}:N", title=x_key), alt.Tooltip(f"{y_key}:Q", title=title, format=numfmt or None)],
+            color=alt.value("#4C78A8")
+        )
+        # Text labels on top of bars
+        text = base.mark_text(align="center", baseline="bottom", dy=-2, color="#333").encode(
+            x=alt.X(f"{x_key}:N", sort=None),
+            y=alt.Y(f"{y_key}:Q"),
+            text=alt.Text(f"{y_key}:Q", format=numfmt or None)
+        )
+        chart = (bar + text).properties(height=320, width="container", title=title)
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        # Multi-series: reshape to long format
+        plot_df = df[[x_key] + y_keys].melt(id_vars=[x_key], var_name="Series", value_name="Value")
+        numfmt = _format_for_dtype(plot_df["Value"]) if not plot_df.empty else ",.2f"
+        base = alt.Chart(plot_df)
+        bar = base.mark_bar().encode(
+            x=alt.X(f"{x_key}:N", sort=None, title=x_key),
+            y=alt.Y("Value:Q", title="Value"),
+            color=alt.Color("Series:N", title="Series"),
+            tooltip=[alt.Tooltip(f"{x_key}:N", title=x_key), alt.Tooltip("Series:N", title="Series"), alt.Tooltip("Value:Q", title="Value", format=numfmt or None)]
+        )
+        text = base.mark_text(align="center", baseline="bottom", dy=-2, color="#333").encode(
+            x=alt.X(f"{x_key}:N", sort=None),
+            y=alt.Y("Value:Q"),
+            detail="Series:N",
+            text=alt.Text("Value:Q", format=numfmt or None)
+        )
+        title = chart_def.get("id") or "Chart"
+        chart = (bar + text).properties(height=360, width="container", title=title)
         st.altair_chart(chart, use_container_width=True)
 
 
-def render_tables(dfs: Dict[str, pd.DataFrame]) -> None:
-    st.subheader("Tables")
-    if not dfs:
-        st.info("No tables available.")
-        return
-
-    for name, df in dfs.items():
-        st.markdown(f"**{name}**")
-        # Try to improve dtypes where applicable
-        display_df = df.copy()
-        for c in display_df.columns:
-            if display_df[c].dtype == object:
-                try:
-                    display_df[c] = pd.to_numeric(display_df[c])
-                except Exception:
-                    pass
-        st.dataframe(display_df, use_container_width=True)
-
-
 def main():
+    st.set_page_config(page_title="AI Report Dashboard", page_icon="📊", layout="wide")
+
     st.title("AI Report Dashboard")
 
-    report = load_report()
-
-    # Header status
-    if not report.get("valid", True):
-        st.error("Report marked as invalid.")
-    if report.get("issues"):
-        with st.expander("Issues detected in report"):
-            for issue in report["issues"]:
-                st.write(f"- {issue}")
+    # Optional: allow user to upload/override the embedded JSON
+    with st.expander("Load a different report JSON (optional)"):
+        uploaded = st.file_uploader("Upload JSON file", type=["json"])
+        if uploaded is not None:
+            try:
+                loaded = json.load(uploaded)
+                st.success("Loaded custom report JSON.")
+                report = loaded
+            except Exception as e:
+                st.error(f"Failed to parse JSON: {e}")
+                report = json_report
+        else:
+            report = json_report
+    if uploaded is None:
+        report = json_report
 
     # Summary
-    render_summary(report.get("summary", []))
+    st.subheader("Summary")
+    summary_list = report.get("summary", [])
+    if isinstance(summary_list, list) and summary_list:
+        st.markdown("\n".join([f"- {s}" for s in summary_list]))
+    elif isinstance(summary_list, str) and summary_list:
+        st.markdown(f"- {summary_list}")
+    else:
+        st.info("No summary provided.")
 
-    # Build DataFrames
-    dfs = build_dataframes(report)
-
-    # Charts
-    render_charts(report, dfs)
+    # Issues (if any)
+    issues = report.get("issues", [])
+    if issues:
+        st.subheader("Issues")
+        st.markdown("\n".join([f"- {i}" for i in issues]))
 
     # Tables
-    render_tables(dfs)
+    st.subheader("Tables")
+    raw_tables = report.get("tables", [])
+    parsed_tables: List[Dict[str, Any]] = []
+    if raw_tables:
+        for idx, t in enumerate(raw_tables):
+            name = t.get("name") or f"Table {idx+1}"
+            columns = t.get("columns", [])
+            rows = t.get("rows", [])
+            try:
+                df = pd.DataFrame(rows, columns=columns)
+                df = _coerce_numeric_columns(df)
+            except Exception:
+                # Fallback: best-effort construction
+                df = pd.DataFrame(rows)
+                df.columns = columns[: len(df.columns)] + [f"col_{i}" for i in range(len(df.columns) - len(columns))]
+                df = _coerce_numeric_columns(df)
+            parsed_tables.append({"name": name, "df": df})
+            st.markdown(f"**{name}**")
+            st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No tables in the report.")
 
-    # Optional: Raw JSON for debugging/review
-    with st.expander("View raw report JSON"):
-        st.code(json.dumps(report, indent=2))
+    # Charts
+    st.subheader("Charts")
+    charts = report.get("charts", [])
+    if charts:
+        for chart_def in charts:
+            chart_id = chart_def.get("id") or "Chart"
+            st.markdown(f"**{chart_id}**")
+            _build_chart(chart_def, parsed_tables)
+    else:
+        st.info("No charts in the report.")
+
+    # Technical details
+    with st.expander("Technical details (raw JSON)"):
+        st.code(json.dumps(report, indent=2), language="json")
 
 
 if __name__ == "__main__":

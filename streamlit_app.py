@@ -1,18 +1,19 @@
+#!/usr/bin/env python3
+# Streamlit app generated from provided JSON report
+
 import streamlit as st
 import pandas as pd
 import altair as alt
-import json
+from typing import Dict, Any, List
 
-st.set_page_config(page_title="AI Report", layout="wide")
-
-# Embedded report data (from the provided JSON)
-report = {
+# Embedded report data (from user-provided JSON)
+REPORT: Dict[str, Any] = {
     "valid": True,
     "issues": [],
     "summary": [
-        "Histogram shows January with the highest registered users and sales in 2025.",
-        "February has the lowest monthly performance.",
-        "Rest of the months are relatively stable, with no extreme outliers after Q1."
+        "January 2025 shows the highest registered users and sales.",
+        "February 2025 records the lowest monthly figures.",
+        "Performance stabilizes from March onwards, with moderate monthly fluctuations."
     ],
     "tables": [
         {
@@ -69,143 +70,194 @@ report = {
     }
 }
 
-# Title
-st.title("AI Report Dashboard")
+# Configure Altair to avoid max rows warnings
+alt.data_transformers.disable_max_rows()
 
-# Summary Section
-st.header("Summary")
-if report.get("summary"):
-    for bullet in report["summary"]:
-        st.markdown(f"- {bullet}")
+st.set_page_config(page_title="Monthly User & Sales Report (2025)", layout="wide")
+st.title("Monthly User & Sales Report (2025)")
+
+# Utility helpers
+
+def labelize(key: str) -> str:
+    return key.replace("_", " ").title() if isinstance(key, str) else str(key)
+
+
+def coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    # Attempt to convert columns to numeric where possible, keeping non-numeric as-is
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="ignore")
+    return df
+
+
+# Summary section
+st.subheader("Summary")
+if REPORT.get("summary"):
+    for item in REPORT["summary"]:
+        st.markdown(f"- {item}")
 else:
     st.info("No summary available.")
 
-# Prepare and render tables
-st.header("Tables")
-tables = report.get("tables", [])
-dfs = {}
+st.markdown("---")
 
-if not tables:
-    st.info("No tables available in the report.")
+# Tables section
+st.subheader("Tables")
 
-for tbl in tables:
-    name = tbl.get("name") or "Table"
-    columns = tbl.get("columns", [])
-    rows = tbl.get("rows", [])
+dataframes_by_name: Dict[str, pd.DataFrame] = {}
 
-    # Build DataFrame
-    df = pd.DataFrame(rows, columns=columns)
+for t in REPORT.get("tables", []):
+    name = t.get("name", "Table")
+    cols: List[str] = t.get("columns", [])
+    rows: List[List[Any]] = t.get("rows", [])
 
-    # Normalize dtypes: convert numeric-looking columns (except 'month')
-    for col in df.columns:
-        if col != "month":
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    # Ensure 'month' is string and create a datetime helper for sorting
-    if "month" in df.columns:
-        df["month"] = df["month"].astype(str)
-        df["month_dt"] = pd.to_datetime(df["month"], format="%Y-%m", errors="coerce")
+    df = pd.DataFrame(rows, columns=cols)
+    df = coerce_numeric_columns(df)
 
-    dfs[name] = df
+    dataframes_by_name[name] = df
 
-    st.subheader(f"Table: {name}")
-    st.dataframe(df.drop(columns=["month_dt"], errors="ignore"))
+    st.markdown(f"#### Table: {name}")
+    st.dataframe(df, use_container_width=True)
 
-# Charts Section
-st.header("Charts")
-charts = report.get("charts", [])
+if not dataframes_by_name:
+    st.warning("No tables provided in the report.")
 
-if not charts:
-    st.info("No charts available in the report.")
+st.markdown("---")
 
-# Use the first table as the base dataset for charts (common report pattern)
-base_df = next(iter(dfs.values())) if dfs else pd.DataFrame()
+# Charts section (Altair)
+st.subheader("Charts")
 
-# Compute month sort order if available
-if not base_df.empty and "month" in base_df.columns:
-    try:
-        months_sorted = (
-            base_df[["month", "month_dt"]]
-            .drop_duplicates()
-            .sort_values("month_dt")
-            ["month"].tolist()
-        )
-    except Exception:
-        months_sorted = base_df["month"].drop_duplicates().tolist()
+# Use the first table as the default dataset for charts unless otherwise specified
+first_df = None
+if REPORT.get("tables"):
+    first_table_name = REPORT["tables"][0].get("name", "Table")
+    first_df = dataframes_by_name.get(first_table_name)
+
+if not REPORT.get("charts"):
+    st.info("No charts provided in the report.")
 else:
-    months_sorted = []
+    for chart in REPORT["charts"]:
+        chart_id = chart.get("id", "chart")
+        chart_type = chart.get("type", "bar").lower()
+        spec = chart.get("spec", {})
+        x_key = spec.get("xKey")
+        y_key = spec.get("yKey")
 
-# Render charts with Altair
-for ch in charts:
-    cid = ch.get("id", "")
-    ctype = ch.get("type", "").lower()
-    spec = ch.get("spec", {})
-    x_key = spec.get("xKey")
-    y_key = spec.get("yKey")
+        df_for_chart = first_df
+        if df_for_chart is None or x_key not in df_for_chart.columns or y_key not in df_for_chart.columns:
+            st.warning(f"Chart '{chart_id}' skipped due to missing data or keys.")
+            continue
 
-    if base_df.empty or x_key not in base_df.columns or y_key not in base_df.columns:
-        st.warning(f"Chart '{cid}' skipped due to missing data or keys.")
-        continue
+        # Preserve the input order for x-axis sorting (e.g., month order)
+        x_order = df_for_chart[x_key].astype(str).tolist()
 
-    data = base_df.copy()
-    # Ensure numeric y
-    data[y_key] = pd.to_numeric(data[y_key], errors="coerce")
+        # Axis formatting for y
+        y_axis_format = None
+        if isinstance(df_for_chart[y_key].dtype, pd.api.types.CategoricalDtype):
+            y_axis_format = None
+        else:
+            # Heuristic: if column name suggests currency or contains 'sales', format as currency
+            if "sale" in y_key.lower() or "amount" in y_key.lower() or "revenue" in y_key.lower():
+                y_axis_format = "$,.0f"
+            else:
+                y_axis_format = ","
 
-    # Define titles based on chart id for clarity
-    if cid == "reg_hist":
-        title = "Registered Users by Month (2025)"
-        y_title = "Registered Users"
-    elif cid == "sales_hist":
-        title = "Total Sales by Month (2025)"
-        y_title = "Total Sales"
+        chart_title = f"{labelize(y_key)} by {labelize(x_key)}"
+
+        # Build Altair chart by type
+        base = alt.Chart(df_for_chart, title=chart_title)
+
+        if chart_type in ("histogram", "bar"):
+            c = (
+                base.mark_bar()
+                .encode(
+                    x=alt.X(f"{x_key}:N", sort=x_order, title=labelize(x_key)),
+                    y=alt.Y(f"{y_key}:Q", title=labelize(y_key), axis=alt.Axis(format=y_axis_format)),
+                    tooltip=[
+                        alt.Tooltip(f"{x_key}:N", title=labelize(x_key)),
+                        alt.Tooltip(f"{y_key}:Q", title=labelize(y_key), format=y_axis_format if y_axis_format else None),
+                    ],
+                )
+            )
+        elif chart_type == "line":
+            c = (
+                base.mark_line(point=True)
+                .encode(
+                    x=alt.X(f"{x_key}:N", sort=x_order, title=labelize(x_key)),
+                    y=alt.Y(f"{y_key}:Q", title=labelize(y_key), axis=alt.Axis(format=y_axis_format)),
+                    tooltip=[
+                        alt.Tooltip(f"{x_key}:N", title=labelize(x_key)),
+                        alt.Tooltip(f"{y_key}:Q", title=labelize(y_key), format=y_axis_format if y_axis_format else None),
+                    ],
+                )
+            )
+        elif chart_type == "area":
+            c = (
+                base.mark_area(opacity=0.6)
+                .encode(
+                    x=alt.X(f"{x_key}:N", sort=x_order, title=labelize(x_key)),
+                    y=alt.Y(f"{y_key}:Q", title=labelize(y_key), axis=alt.Axis(format=y_axis_format)),
+                    tooltip=[
+                        alt.Tooltip(f"{x_key}:N", title=labelize(x_key)),
+                        alt.Tooltip(f"{y_key}:Q", title=labelize(y_key), format=y_axis_format if y_axis_format else None),
+                    ],
+                )
+            )
+        elif chart_type == "scatter":
+            c = (
+                base.mark_point(filled=True, size=80)
+                .encode(
+                    x=alt.X(f"{x_key}:Q", title=labelize(x_key)),
+                    y=alt.Y(f"{y_key}:Q", title=labelize(y_key), axis=alt.Axis(format=y_axis_format)),
+                    tooltip=[
+                        alt.Tooltip(f"{x_key}:Q", title=labelize(x_key)),
+                        alt.Tooltip(f"{y_key}:Q", title=labelize(y_key), format=y_axis_format if y_axis_format else None),
+                    ],
+                )
+            )
+        elif chart_type == "pie":
+            # For pie, treat y_key as value and x_key as category
+            # Compute aggregated values by category
+            pie_df = df_for_chart.groupby(x_key, as_index=False)[y_key].sum()
+            c = (
+                alt.Chart(pie_df, title=chart_title)
+                .mark_arc()
+                .encode(
+                    theta=alt.Theta(f"{y_key}:Q", stack=True),
+                    color=alt.Color(f"{x_key}:N", legend=alt.Legend(title=labelize(x_key))),
+                    tooltip=[
+                        alt.Tooltip(f"{x_key}:N", title=labelize(x_key)),
+                        alt.Tooltip(f"{y_key}:Q", title=labelize(y_key), format=y_axis_format if y_axis_format else None),
+                    ],
+                )
+            )
+        else:
+            # Fallback to bar
+            c = (
+                base.mark_bar()
+                .encode(
+                    x=alt.X(f"{x_key}:N", sort=x_order, title=labelize(x_key)),
+                    y=alt.Y(f"{y_key}:Q", title=labelize(y_key), axis=alt.Axis(format=y_axis_format)),
+                    tooltip=[
+                        alt.Tooltip(f"{x_key}:N", title=labelize(x_key)),
+                        alt.Tooltip(f"{y_key}:Q", title=labelize(y_key), format=y_axis_format if y_axis_format else None),
+                    ],
+                )
+            )
+
+        st.altair_chart(c.resolve_scale(y="independent"), use_container_width=True)
+
+# Optional: Debug metadata
+with st.expander("Debug Metadata", expanded=False):
+    st.write("Validity:", REPORT.get("valid"))
+    issues = REPORT.get("issues", [])
+    if issues:
+        st.error({"issues": issues})
     else:
-        title = f"{y_key} by {x_key}"
-        y_title = y_key.replace("_", " ").title()
+        st.write("Issues: None")
+    st.write("Intent:", REPORT.get("echo", {}).get("intent"))
+    st.write("SQL present:", REPORT.get("echo", {}).get("sql_present"))
+    st.write("Stats:")
+    st.json(REPORT.get("echo", {}).get("stats", {}))
+    st.write("Source usage:")
+    st.json(REPORT.get("echo", {}).get("used", {}))
 
-    # For 'histogram' types, render as bar charts over discrete months
-    if ctype in ("histogram", "bar"):
-        chart = (
-            alt.Chart(data, title=title)
-            .mark_bar()
-            .encode(
-                x=alt.X(f"{x_key}:N", sort=months_sorted if months_sorted else None, title="Month" if x_key == "month" else x_key.title()),
-                y=alt.Y(f"{y_key}:Q", title=y_title),
-                tooltip=[
-                    alt.Tooltip(f"{x_key}:N", title="Month" if x_key == "month" else x_key.title()),
-                    alt.Tooltip(f"{y_key}:Q", title=y_title, format=",.2f"),
-                ],
-            )
-            .properties(width="container", height=320)
-        )
-        st.altair_chart(chart, use_container_width=True)
-    elif ctype == "pie":
-        # General pie rendering support (not used in this report but supported)
-        chart = (
-            alt.Chart(data, title=title)
-            .mark_arc(outerRadius=120)
-            .encode(
-                theta=alt.Theta(f"{y_key}:Q", stack=True),
-                color=alt.Color(f"{x_key}:N", legend=alt.Legend(title=x_key.title())),
-                tooltip=[x_key, y_key],
-            )
-            .properties(height=360)
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info(f"Chart type '{ctype}' not directly supported; rendering as bar chart.")
-        chart = (
-            alt.Chart(data, title=title)
-            .mark_bar()
-            .encode(
-                x=alt.X(f"{x_key}:N", sort=months_sorted if months_sorted else None, title=x_key.title()),
-                y=alt.Y(f"{y_key}:Q", title=y_title),
-                tooltip=[x_key, y_key],
-            )
-            .properties(width="container", height=320)
-        )
-        st.altair_chart(chart, use_container_width=True)
-
-# Optional: Show raw JSON for debugging/transparency
-with st.expander("Debug: Raw Report JSON"):
-    st.code(json.dumps(report, indent=2), language="json")
-
-st.caption("Generated by AI: Streamlit + Altair + pandas")
+st.caption("Built with Streamlit, Altair, and Pandas")

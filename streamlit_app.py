@@ -1,31 +1,23 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from typing import Dict, Any, List
+from typing import List, Dict, Any, Optional
 
-# Embedded report JSON provided by the user
+# Embedded report data provided to the app
 REPORT: Dict[str, Any] = {
     "valid": True,
     "issues": [],
     "summary": [
-        "Registered users decreased from 4,998 in Q1 to 3,826 in Q2 2025 (-23.43%).",
-        "Total sales dropped from 461,543.37 in Q1 to 371,077.93 in Q2 2025 (-19.61%).",
-        "Total units sold declined from 19,603 in Q1 to 15,482 in Q2 2025 (-21.01%).",
-        "Performance in Q2 2025 is lower than in Q1 2025 across all key metrics."
+        "Registered users in 2025 Q2 (3,826) decreased by 23.43% compared to Q1 (4,998).",
+        "Total sales in Q2 (371,077.93) dropped by 19.61% from Q1 (461,543.37).",
+        "Total units sold in Q2 (15,482) declined by 21.01% from Q1 (19,603).",
+        "Q2 2025 performance is lower than Q1 2025 across registrations, sales, and units sold."
     ],
     "tables": [
         {
             "name": "Table",
-            "columns": [
-                "period",
-                "registered_users",
-                "total_sales",
-                "total_units"
-            ],
-            "rows": [
-                ["Q2", "3826", 371077.93, "15482"],
-                ["Q1", "4998", 461543.3700000002, "19603"]
-            ]
+            "columns": ["period", "registered_users", "total_sales", "total_units"],
+            "rows": [["Q2", "3826", 371077.93, "15482"], ["Q1", "4998", 461543.3700000002, "19603"]]
         }
     ],
     "charts": [
@@ -46,179 +38,176 @@ REPORT: Dict[str, Any] = {
     "echo": {
         "intent": "comparison_totals",
         "used": {
-            "tables": [
-                "`Haleon_Rewards_User_Performance_110925_list`",
-                "`Haleon_Rewards_User_Performance_110925_SKUs`"
-            ],
-            "columns": [
-                "\"user_id\"",
-                "\"comuserid\"",
-                "\"Upload_Date\"",
-                "\"Total Sales Amount\"",
-                "\"Total_Purchase_Units\""
-            ]
+            "tables": ["`Haleon_Rewards_User_Performance_110925_list`", "`Haleon_Rewards_User_Performance_110925_SKUs`"],
+            "columns": ["\"user_id\"", "\"comuserid\"", "\"Upload_Date\"", "\"Total Sales Amount\"", "\"Total_Purchase_Units\""]
         },
-        "stats": {"elapsed": 0.081987},
+        "stats": {"elapsed": 0.042964239},
         "sql_present": True
     }
 }
 
+# -----------------------------
+# Utility functions
+# -----------------------------
 
-def dataframe_from_table(table_obj: Dict[str, Any]) -> pd.DataFrame:
-    columns: List[str] = table_obj.get("columns", [])
-    rows: List[List[Any]] = table_obj.get("rows", [])
-    df = pd.DataFrame(rows, columns=columns)
+def to_dataframe(table_obj: Dict[str, Any]) -> pd.DataFrame:
+    """Create a pandas DataFrame from a table object with 'columns' and 'rows'."""
+    cols = table_obj.get("columns", [])
+    rows = table_obj.get("rows", [])
+    df = pd.DataFrame(rows, columns=cols)
     return df
 
 
-def coerce_numeric(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
-    for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+def coerce_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Attempt to convert columns to numeric where possible, in place."""
+    for c in df.columns:
+        # Try to convert entire column; non-convertible values remain as-is
+        try:
+            converted = pd.to_numeric(df[c], errors="ignore")
+            df[c] = converted
+        except Exception:
+            pass
     return df
 
 
-def build_bar_chart(df: pd.DataFrame, chart_obj: Dict[str, Any]) -> alt.Chart | None:
-    spec = chart_obj.get("spec", {})
+def get_all_dfs(report: Dict[str, Any]) -> List[pd.DataFrame]:
+    dfs = []
+    for t in report.get("tables", []):
+        df = to_dataframe(t)
+        df = coerce_numeric_columns(df)
+        dfs.append(df)
+    return dfs
+
+
+def find_table_for_chart(report: Dict[str, Any], x_key: str, y_keys: List[str]) -> Optional[pd.DataFrame]:
+    """Find the first table that contains x_key and all y_keys."""
+    for t in report.get("tables", []):
+        cols = t.get("columns", [])
+        if x_key in cols and all(y in cols for y in y_keys):
+            df = to_dataframe(t)
+            df = coerce_numeric_columns(df)
+            return df
+    return None
+
+
+def build_bar_chart(df: pd.DataFrame, spec: Dict[str, Any], chart_title: str = "") -> alt.Chart:
     x_key = spec.get("xKey")
-    series = spec.get("series", [])
+    # Determine series to plot
+    series_list = spec.get("series")
+    if series_list and isinstance(series_list, list):
+        y_keys = [s.get("yKey") for s in series_list if s.get("yKey")]
+        name_map = {s.get("yKey"): s.get("name", s.get("yKey")) for s in series_list if s.get("yKey")}
+        metric_order = [name_map[y] for y in y_keys]
+    else:
+        # Fallback to single yKey
+        y_key = spec.get("yKey")
+        y_keys = [y_key] if y_key else []
+        name_map = {y_key: y_key}
+        metric_order = [name_map[y_key]] if y_key else []
 
-    if not x_key or not series:
-        return None
+    if not x_key or not y_keys:
+        raise ValueError("Bar chart spec requires xKey and at least one yKey/series")
 
-    value_cols = [s.get("yKey") for s in series if s.get("yKey")]
-    # Ensure numeric types for value columns
-    df_num = df.copy()
-    df_num = coerce_numeric(df_num, value_cols)
+    # Keep x order as it appears in the data
+    x_order = df[x_key].astype(str).tolist()
 
-    # Melt to long format for multi-series plotting
-    long_df = df_num.melt(
-        id_vars=[x_key],
-        value_vars=value_cols,
-        var_name="metric_key",
-        value_name="value"
-    )
+    # Melt to long format for grouped bars
+    use_cols = [x_key] + y_keys
+    df_long = df[use_cols].copy()
+    df_long = df_long.melt(id_vars=[x_key], value_vars=y_keys, var_name="metric_key", value_name="value")
+    df_long["metric"] = df_long["metric_key"].map(name_map).fillna(df_long["metric_key"])
 
-    # Map metric keys to display names
-    name_map = {s["yKey"]: s.get("name", s["yKey"]) for s in series if s.get("yKey")}
-    long_df["metric"] = long_df["metric_key"].map(name_map).fillna(long_df["metric_key"])
-
-    chart_title = chart_obj.get("id", "") or "Bar Chart"
-
+    # Build chart
     chart = (
-        alt.Chart(long_df)
+        alt.Chart(df_long, title=chart_title)
         .mark_bar()
         .encode(
-            x=alt.X(f"{x_key}:N", title=x_key),
+            x=alt.X(f"{x_key}:N", sort=x_order, title=x_key),
+            xOffset=alt.X("metric:N", sort=metric_order, title=None),
             y=alt.Y("value:Q", title="Value"),
-            color=alt.Color("metric:N", title="Metric"),
+            color=alt.Color("metric:N", sort=metric_order, title="Metric"),
             tooltip=[
                 alt.Tooltip(f"{x_key}:N", title=x_key),
                 alt.Tooltip("metric:N", title="Metric"),
-                alt.Tooltip("value:Q", title="Value", format=",")
+                alt.Tooltip("value:Q", title="Value", format=",.2f"),
             ],
         )
-        .properties(title=chart_title)
+        .properties(height=360)
     )
-
     return chart
 
 
-def build_pie_chart(df: pd.DataFrame, chart_obj: Dict[str, Any]) -> alt.Chart | None:
-    # Generic pie chart builder (not used by current input, included for completeness)
-    spec = chart_obj.get("spec", {})
-    category_key = spec.get("categoryKey") or spec.get("xKey") or spec.get("labelKey")
-    value_key = spec.get("valueKey") or spec.get("yKey")
+# -----------------------------
+# Streamlit App UI
+# -----------------------------
 
-    if not category_key or not value_key:
-        return None
+st.set_page_config(page_title="AI Report Dashboard", layout="wide")
+st.title("AI Report Dashboard")
 
-    df_num = df.copy()
-    df_num[value_key] = pd.to_numeric(df_num[value_key], errors="coerce")
+# Summary
+summary_items = REPORT.get("summary", [])
+if summary_items:
+    st.header("Summary")
+    for item in summary_items:
+        st.markdown(f"- {item}")
 
-    chart_title = chart_obj.get("id", "") or "Pie Chart"
+# Tables
+tables = REPORT.get("tables", [])
+if tables:
+    st.header("Tables")
+    for idx, t in enumerate(tables):
+        name = t.get("name") or f"Table {idx + 1}"
+        st.subheader(name)
+        df = to_dataframe(t)
+        df = coerce_numeric_columns(df)
+        st.dataframe(df, use_container_width=True)
 
-    chart = (
-        alt.Chart(df_num)
-        .mark_arc()
-        .encode(
-            theta=alt.Theta(f"{value_key}:Q", title=value_key),
-            color=alt.Color(f"{category_key}:N", title=category_key),
-            tooltip=[
-                alt.Tooltip(f"{category_key}:N", title=category_key),
-                alt.Tooltip(f"{value_key}:Q", title=value_key, format=",")
-            ],
-        )
-        .properties(title=chart_title)
-    )
+# Charts
+charts = REPORT.get("charts", [])
+if charts:
+    st.header("Charts")
 
-    return chart
-
-
-def render_chart(chart_obj: Dict[str, Any], dataframes_by_name: Dict[str, pd.DataFrame]) -> None:
-    if len(dataframes_by_name) == 0:
-        st.info("No data available for charts.")
-        return
-
-    # Use the first available table as the data source for charts
-    first_name, df = next(iter(dataframes_by_name.items()))
-
-    ctype = chart_obj.get("type")
-    chart = None
-
-    if ctype == "bar":
-        chart = build_bar_chart(df, chart_obj)
-    elif ctype == "pie":
-        chart = build_pie_chart(df, chart_obj)
-
-    if chart is None:
-        st.warning(f"Unsupported or invalid chart spec for chart id '{chart_obj.get('id', '')}'.")
+for ch in charts:
+    ch_id = ch.get("id", "chart")
+    ch_type = ch.get("type", "bar")
+    spec = ch.get("spec", {})
+    # Determine data source table for the chart
+    x_key = spec.get("xKey")
+    series_list = spec.get("series")
+    if series_list and isinstance(series_list, list):
+        y_keys = [s.get("yKey") for s in series_list if s.get("yKey")]
     else:
-        st.altair_chart(chart, use_container_width=True)
+        y_keys = [spec.get("yKey")] if spec.get("yKey") else []
 
+    df_for_chart = None
+    if x_key and y_keys:
+        df_for_chart = find_table_for_chart(REPORT, x_key, y_keys)
 
-def main() -> None:
-    st.set_page_config(page_title="AI Report", layout="wide")
-    st.title("AI Report")
+    # Fallback to first table if no perfect match
+    if df_for_chart is None:
+        dfs = get_all_dfs(REPORT)
+        if dfs:
+            df_for_chart = dfs[0]
 
-    # Summary
-    summary_list = REPORT.get("summary", [])
-    if summary_list:
-        st.subheader("Summary")
-        st.markdown("\n".join([f"- {item}" for item in summary_list]))
-    else:
-        st.info("No summary available.")
+    if df_for_chart is None:
+        st.warning(f"No data available to render chart '{ch_id}'.")
+        continue
 
-    # Tables
-    tables = REPORT.get("tables", [])
-    dataframes_by_name: Dict[str, pd.DataFrame] = {}
+    try:
+        if ch_type == "bar":
+            chart_obj = build_bar_chart(df_for_chart, spec, chart_title=f"{ch_id} - {ch_type.capitalize()} Chart")
+            st.altair_chart(chart_obj, use_container_width=True)
+        else:
+            st.info(f"Chart type '{ch_type}' is not specifically implemented. Attempting bar chart rendering.")
+            chart_obj = build_bar_chart(df_for_chart, spec, chart_title=f"{ch_id} - {ch_type.capitalize()} Chart")
+            st.altair_chart(chart_obj, use_container_width=True)
+    except Exception as e:
+        st.error(f"Failed to render chart '{ch_id}': {e}")
 
-    if tables:
-        st.subheader("Tables")
-        for t in tables:
-            df = dataframe_from_table(t)
-            name = t.get("name") or "Table"
-            dataframes_by_name[name] = df
-            st.markdown(f"**{name}**")
-            st.dataframe(df, use_container_width=True)
-    else:
-        st.info("No tables available.")
-
-    # Charts
-    charts = REPORT.get("charts", [])
-    if charts:
-        st.subheader("Charts")
-        for chart in charts:
-            render_chart(chart, dataframes_by_name)
-    else:
-        st.info("No charts available.")
-
-    # Technical metadata (optional)
-    echo = REPORT.get("echo")
-    if echo:
-        with st.expander("Technical details"):
-            st.write(echo)
-
-
-if __name__ == "__main__":
-    main()
+# Optional: show basic metadata
+with st.expander("Report Metadata"):
+    st.write({
+        "valid": REPORT.get("valid"),
+        "issues": REPORT.get("issues"),
+        "echo": REPORT.get("echo")
+    })

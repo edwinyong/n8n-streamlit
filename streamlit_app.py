@@ -1,16 +1,23 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from typing import List, Dict, Any
 
-# Embedded report data (from JSON input)
-REPORT: Dict[str, Any] = {
+# -----------------------------
+# Page config
+# -----------------------------
+st.set_page_config(page_title="AI Report App", layout="wide")
+alt.data_transformers.disable_max_rows()
+
+# -----------------------------
+# Embedded report JSON (as Python dict)
+# -----------------------------
+report = {
     "valid": True,
     "issues": [],
     "summary": [
-        "Registered users decreased from 4,998 in Q1 to 3,826 in Q2 2025 (-23.43%).",
-        "Total sales dropped from 461,543.37 in Q1 to 371,077.93 in Q2 2025 (-19.63%).",
-        "Both user registration and sales performance were lower in Q2 compared to Q1 2025."
+        "Registered users in 2025 Q2 decreased to 3,826 from 4,998 in Q1 (-23.43%).",
+        "Total sales in 2025 Q2 dropped to 371,077.93 from 461,543.37 in Q1 (-19.63%).",
+        "Both registered user count and sales performance were lower in Q2 compared to Q1 2025."
     ],
     "tables": [
         {
@@ -35,149 +42,210 @@ REPORT: Dict[str, Any] = {
     ],
     "echo": {
         "intent": "comparison_totals",
-        "used": {"tables": ["`Haleon_Rewards_User_Performance_110925_list`"], "columns": ['"user_id"', '"Total Sales Amount"', '"Upload_Date"']},
+        "used": {
+            "tables": ["`Haleon_Rewards_User_Performance_110925_list`"],
+            "columns": ['"user_id"', '"Total Sales Amount"', '"Upload_Date"']
+        },
         "stats": {"elapsed": 0.04843408},
         "sql_present": True
     }
 }
 
+# -----------------------------
+# Helper functions
+# -----------------------------
 
-def coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    """Attempt to convert columns to numeric where possible."""
-    for c in df.columns:
-        df[c] = pd.to_numeric(df[c], errors="ignore")
+def to_dataframe(table_obj: dict) -> pd.DataFrame:
+    """Convert a table object from the report to a pandas DataFrame with best-effort numeric coercion."""
+    df = pd.DataFrame(table_obj.get("rows", []), columns=table_obj.get("columns", []))
+    # Best-effort numeric conversion for each column
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="ignore")
     return df
 
 
-def build_dataframe_from_table(table_obj: Dict[str, Any]) -> pd.DataFrame:
-    cols = table_obj.get("columns", [])
-    rows = table_obj.get("rows", [])
-    df = pd.DataFrame(rows, columns=cols)
-    df = coerce_numeric(df)
-    return df
+def render_grouped_bar(spec: dict, df: pd.DataFrame) -> alt.Chart:
+    """Render a grouped bar chart using Altair from the provided spec and dataframe.
 
-
-def grouped_bar_chart(df: pd.DataFrame, spec: Dict[str, Any], title: str = None) -> alt.Chart:
+    Expects spec with keys: xKey, series (list of {name, yKey}).
+    """
     x_key = spec.get("xKey")
-    series = spec.get("series", [])
+    if not x_key:
+        # Fallback to first column if not specified
+        x_key = df.columns[0]
 
-    # Build tidy (long) dataframe for Altair grouped bars
-    value_keys = [s.get("yKey") for s in series if s.get("yKey")]
-    name_map = {s.get("yKey"): (s.get("name") or s.get("yKey")) for s in series if s.get("yKey")}
+    series_list = spec.get("series", [])
+    value_vars = [s.get("yKey") for s in series_list if s.get("yKey")]
 
-    # Ensure numeric types for series columns
-    for k in value_keys:
-        if k in df.columns:
-            df[k] = pd.to_numeric(df[k], errors="coerce")
+    # Validate presence of columns
+    missing = [c for c in value_vars + [x_key] if c not in df.columns]
+    if missing:
+        st.warning(f"Cannot render grouped bar: missing columns {missing}")
+        return None
 
-    long_df = df.melt(id_vars=[x_key], value_vars=value_keys, var_name="metric_key", value_name="value")
-    long_df["metric"] = long_df["metric_key"].map(name_map).fillna(long_df["metric_key"])  # display names
+    # Coerce value_vars to numeric where possible
+    df2 = df.copy()
+    for c in value_vars:
+        df2[c] = pd.to_numeric(df2[c], errors="coerce")
 
-    # Sort categories in the original order they appear
-    if x_key in df.columns:
-        categories_order = list(df[x_key].astype(str).unique())
-    else:
-        categories_order = None
+    # Melt to long format for grouped bar
+    long_df = df2.melt(id_vars=[x_key], value_vars=value_vars, var_name="series_key", value_name="value")
 
+    # Map yKey to display name
+    name_map = {s.get("yKey"): s.get("name", s.get("yKey")) for s in series_list}
+    long_df["series_name"] = long_df["series_key"].map(name_map).fillna(long_df["series_key"]) 
+
+    # Build chart
     chart = (
         alt.Chart(long_df)
         .mark_bar()
         .encode(
-            x=alt.X(f"{x_key}:N", sort=categories_order, title=x_key),
-            xOffset=alt.XOffset("metric:N"),
+            x=alt.X(f"{x_key}:N", title=x_key),
+            xOffset=alt.XOffset("series_name:N"),
             y=alt.Y("value:Q", title="Value"),
-            color=alt.Color("metric:N", title="Series"),
+            color=alt.Color("series_name:N", title="Series"),
             tooltip=[
                 alt.Tooltip(f"{x_key}:N", title=x_key),
-                alt.Tooltip("metric:N", title="Series"),
+                alt.Tooltip("series_name:N", title="Series"),
                 alt.Tooltip("value:Q", title="Value", format=",.2f"),
             ],
         )
-        .properties(title=title or "Grouped Bar")
+        .properties(height=380)
+        .interactive()
     )
-
     return chart
 
 
-def render_chart(chart_obj: Dict[str, Any], tables: List[Dict[str, Any]], df_cache: Dict[str, pd.DataFrame]) -> None:
-    chart_id = chart_obj.get("id", "chart")
-    chart_type = chart_obj.get("type", "").lower()
-    spec = chart_obj.get("spec", {})
+def render_chart(chart_obj: dict, tables_map: dict):
+    """Dispatch rendering based on chart type. Uses the first table if none specified."""
+    ctype = (chart_obj or {}).get("type", "").lower()
+    spec = (chart_obj or {}).get("spec", {})
 
-    # Heuristic: use the first table unless specified otherwise
-    # Build DataFrame cache for table name lookup (if needed in the future)
-    if not df_cache:
-        for t in tables:
-            name = t.get("name") or "Table"
-            df_cache[name] = build_dataframe_from_table(t)
+    # Choose a data source: use the first table by default
+    df = None
+    if tables_map:
+        # Grab the first DataFrame in the map
+        df = next(iter(tables_map.values()))
 
-    # Default to first table
-    first_table_name = tables[0].get("name") if tables else "Table"
-    df = df_cache.get(first_table_name)
+    if df is None or df.empty:
+        st.info("No data available to render charts.")
+        return
 
-    st.markdown(f"#### Chart: {chart_id} ({chart_obj.get('type')})")
+    if ctype in ("groupedbar", "grouped_bar", "group-bar"):
+        chart = render_grouped_bar(spec, df)
+        if chart is not None:
+            st.altair_chart(chart, use_container_width=True)
+        return
 
-    if chart_type == "groupedbar":
-        title = None
-        try:
-            # Create a readable title from series names if available
-            series_names = [s.get("name") for s in spec.get("series", []) if s.get("name")]
-            if series_names:
-                title = " vs ".join(series_names)
-        except Exception:
-            title = None
-        chart = grouped_bar_chart(df, spec, title=title)
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info(f"Chart type '{chart_obj.get('type')}' is not explicitly supported. Attempting fallback rendering as grouped bar.")
-        chart = grouped_bar_chart(df, spec)
-        st.altair_chart(chart, use_container_width=True)
+    # Basic bar chart (single series) fallback if type is 'bar' and spec.yKey provided
+    if ctype == "bar":
+        x_key = spec.get("xKey") or df.columns[0]
+        y_key = spec.get("yKey")
+        if y_key and y_key in df.columns:
+            c = (
+                alt.Chart(df)
+                .mark_bar()
+                .encode(
+                    x=alt.X(f"{x_key}:N", title=x_key),
+                    y=alt.Y(f"{y_key}:Q", title=y_key),
+                    tooltip=[x_key, alt.Tooltip(f"{y_key}:Q", format=",.2f")],
+                    color=alt.value("#1f77b4"),
+                )
+                .properties(height=380)
+                .interactive()
+            )
+            st.altair_chart(c, use_container_width=True)
+            return
+
+    # Basic line chart
+    if ctype == "line":
+        x_key = spec.get("xKey") or df.columns[0]
+        y_key = spec.get("yKey")
+        if y_key and y_key in df.columns:
+            c = (
+                alt.Chart(df)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X(f"{x_key}:N", title=x_key),
+                    y=alt.Y(f"{y_key}:Q", title=y_key),
+                    color=alt.value("#ff7f0e"),
+                    tooltip=[x_key, alt.Tooltip(f"{y_key}:Q", format=",.2f")],
+                )
+                .properties(height=380)
+                .interactive()
+            )
+            st.altair_chart(c, use_container_width=True)
+            return
+
+    # Basic pie chart (requires spec with categoryKey and valueKey); included for completeness
+    if ctype == "pie":
+        category_key = spec.get("categoryKey") or df.columns[0]
+        value_key = spec.get("valueKey") or df.columns[1] if len(df.columns) > 1 else None
+        if value_key and value_key in df.columns:
+            c = (
+                alt.Chart(df)
+                .mark_arc()
+                .encode(
+                    theta=alt.Theta(f"{value_key}:Q", stack=True),
+                    color=alt.Color(f"{category_key}:N", legend=True),
+                    tooltip=[category_key, alt.Tooltip(f"{value_key}:Q", format=",.2f")],
+                )
+                .properties(height=380)
+            )
+            st.altair_chart(c, use_container_width=True)
+            return
+
+    # If we reach here, type is not supported
+    st.warning(f"Unsupported chart type: {chart_obj.get('type')}. Displaying raw spec below.")
+    with st.expander("Raw chart spec"):
+        st.json(chart_obj)
 
 
-def main():
-    st.set_page_config(page_title="AI Report Dashboard", page_icon="📊", layout="wide")
-    st.title("AI Report Dashboard")
+# -----------------------------
+# App layout
+# -----------------------------
+st.title("AI Report Dashboard")
+st.caption("Auto-generated Streamlit app rendering summary, tables, and charts from a JSON report.")
 
-    # Summary
-    summary_items = REPORT.get("summary", [])
-    if summary_items:
-        st.subheader("Summary")
-        summary_md = "\n".join([f"- {line}" for line in summary_items])
-        st.markdown(summary_md)
+# Summary section
+st.header("Summary")
+summary_items = report.get("summary", [])
+if summary_items:
+    for s in summary_items:
+        st.markdown(f"- {s}")
+else:
+    st.info("No summary available.")
 
-    # Tables
-    tables = REPORT.get("tables", [])
-    if tables:
-        st.subheader("Tables")
-        for idx, table_obj in enumerate(tables, start=1):
-            name = table_obj.get("name") or f"Table {idx}"
-            st.markdown(f"#### {name}")
-            df = build_dataframe_from_table(table_obj)
-            st.dataframe(df, use_container_width=True)
+# Tables section
+st.header("Tables")
+tables = report.get("tables", [])
+tables_map = {}
+if tables:
+    for idx, t in enumerate(tables, start=1):
+        name = t.get("name") or f"Table {idx}"
+        df = to_dataframe(t)
+        tables_map[name] = df
+        st.subheader(name)
+        st.dataframe(df, use_container_width=True)
+else:
+    st.info("No tables available.")
 
-    # Charts
-    charts = REPORT.get("charts", [])
-    if charts:
-        st.subheader("Charts")
-        df_cache: Dict[str, pd.DataFrame] = {}
-        for chart_obj in charts:
-            render_chart(chart_obj, tables, df_cache)
+# Charts section
+st.header("Charts")
+charts = report.get("charts", [])
+if charts:
+    for ch in charts:
+        chart_title = ch.get("id") or ch.get("type", "Chart")
+        st.subheader(str(chart_title).title())
+        render_chart(ch, tables_map)
+else:
+    st.info("No charts available.")
 
-    # Optional debug/metadata
-    with st.expander("Report Metadata"):
-        echo = REPORT.get("echo", {})
-        st.write({
-            "valid": REPORT.get("valid"),
-            "issues": REPORT.get("issues"),
-            "intent": echo.get("intent"),
-            "used": echo.get("used"),
-            "stats": echo.get("stats"),
-            "sql_present": echo.get("sql_present"),
-        })
-        st.caption("This section shows diagnostic metadata included with the report input.")
+# Technical details
+with st.expander("Technical details (echo)"):
+    st.json(report.get("echo", {}))
 
-    st.caption("Charts are rendered with Altair; tables are displayed with st.dataframe.")
-
-
-if __name__ == "__main__":
-    main()
+# Footer spacing
+st.write("")
+st.write("")
+st.caption("Generated by AI from a provided JSON report.")

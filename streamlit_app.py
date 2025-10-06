@@ -3,239 +3,192 @@ import pandas as pd
 import altair as alt
 
 # -----------------------------
-# Embedded report JSON (as Python dict)
+# Embedded report JSON payload
 # -----------------------------
-REPORT = {
-    "valid": True,
-    "issues": [],
-    "summary": [
-        "Registered users decreased from 4,998 in 2025 Q1 to 3,826 in 2025 Q2, a drop of 1,172 users (-23.45%).",
-        "Total sales fell from 461,543.37 in 2025 Q1 to 371,077.93 in 2025 Q2, a decrease of 90,465.44 (-19.61%).",
-        "Both registered users and sales were higher in 2025 Q1 compared to Q2."
+REPORT_DATA = {
+    'valid': True,
+    'issues': [],
+    'summary': [
+        'Monthly registered users peaked in February 2025 at 2,093, then generally declined through September.',
+        'Total sales also peaked in February 2025 (181,249.13), followed by a gradual decrease, reaching the lowest in September (18,826.01).',
+        'Both user registrations and sales show a downward trend from Q1 to Q3 2025.'
     ],
-    "tables": [
+    'tables': [
         {
-            "name": "Table",
-            "columns": ["period", "registered_users", "total_sales"],
-            "rows": [
-                ["2025 Q1", "4998", 461543.37000000733],
-                ["2025 Q2", "3826", 371077.93000000285]
+            'name': 'Table',
+            'columns': ['month', 'registered_users', 'total_sales'],
+            'rows': [
+                ['2025-01-01', '1416', 119626.18999999885],
+                ['2025-02-01', '2093', 181249.12999999718],
+                ['2025-03-01', '1946', 162391.27999999782],
+                ['2025-04-01', '1621', 122584.14999999863],
+                ['2025-05-01', '1096', 110036.75999999886],
+                ['2025-06-01', '1491', 138457.01999999848],
+                ['2025-07-01', '1036', 101228.30999999943],
+                ['2025-08-01', '762', 90910.37999999947],
+                ['2025-09-01', '194', 18826.00999999998]
             ]
         }
     ],
-    "charts": [
+    'charts': [
         {
-            "id": "main",
-            "type": "groupedBar",
-            "spec": {
-                "xKey": "period",
-                "yKey": "value",
-                "series": [
-                    {"name": "Registered Users", "yKey": "registered_users"},
-                    {"name": "Total Sales", "yKey": "total_sales"}
+            'id': 'trend1',
+            'type': 'line',
+            'spec': {
+                'xKey': 'month',
+                'yKey': 'registered_users',
+                'series': [
+                    {'name': 'Registered Users', 'yKey': 'registered_users'}
+                ]
+            }
+        },
+        {
+            'id': 'trend2',
+            'type': 'line',
+            'spec': {
+                'xKey': 'month',
+                'yKey': 'total_sales',
+                'series': [
+                    {'name': 'Total Sales', 'yKey': 'total_sales'}
                 ]
             }
         }
     ],
-    "echo": {
-        "intent": "comparison_totals",
-        "used": {
-            "tables": [
-                "`Haleon_Rewards_User_Performance_110925_user_list`",
-                "`Haleon_Rewards_User_Performance_110925_SKUs`"
-            ],
-            "columns": ["user_id", "Upload_Date", "Total Sales Amount", "comuserid"]
+    'echo': {
+        'intent': 'trend',
+        'used': {
+            'tables': ['`Haleon_Rewards_User_Performance_110925_SKUs`'],
+            'columns': ['Upload_Date', 'comuserid', 'Total Sales Amount']
         },
-        "stats": {"elapsed": 0.070259202},
-        "sql_present": True
+        'stats': {'elapsed': 0.01229455},
+        'sql_present': True
     }
 }
-
-# -----------------------------
-# Streamlit App
-# -----------------------------
-st.set_page_config(page_title="User & Sales Report (2025 Q1 vs Q2)", layout="wide")
-alt.data_transformers.disable_max_rows()
-
-st.title("User & Sales Report")
-st.caption("A Streamlit app rendering summaries, tables, and Altair charts from a JSON report.")
 
 # -----------------------------
 # Helper functions
 # -----------------------------
 
-def to_dataframe(table_dict: dict) -> pd.DataFrame:
-    df = pd.DataFrame(table_dict.get("rows", []), columns=table_dict.get("columns", []))
-    # Attempt safe numeric conversion for columns that are fully numeric
+def build_dataframe(table_dict: dict) -> pd.DataFrame:
+    df = pd.DataFrame(table_dict['rows'], columns=table_dict['columns'])
+    # Convert date-like columns
     for col in df.columns:
-        # Remove common thousands separators before attempting conversion
-        series_str = df[col].astype(str).str.replace(",", "", regex=False)
-        converted = pd.to_numeric(series_str, errors="coerce")
-        # Convert only if all non-null and original length match (i.e., fully numeric or NA)
-        if converted.notna().sum() == len(df):
-            df[col] = converted
+        cl = col.lower()
+        if cl in ['month', 'date'] or cl.endswith('date'):
+            try:
+                df[col] = pd.to_datetime(df[col])
+            except Exception:
+                pass
+    # Coerce numeric where applicable
+    for col in df.columns:
+        if col.lower() in ['registered_users', 'total_sales']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
     return df
 
 
-def render_grouped_bar(df: pd.DataFrame, x_key: str, series: list, title: str = None):
-    # Build a long-form dataframe: [x_key, metric, value]
-    long_parts = []
-    for s in series:
-        metric_name = s.get("name") or s.get("yKey")
-        y_key = s.get("yKey")
-        if y_key not in df.columns:
-            continue
-        part = pd.DataFrame({
-            x_key: df[x_key],
-            "metric": metric_name,
-            "value": pd.to_numeric(df[y_key], errors="coerce")
-        })
-        long_parts.append(part)
-    if not long_parts:
-        st.warning("No valid series found to render grouped bar chart.")
-        return
-    long_df = pd.concat(long_parts, ignore_index=True)
+def make_line_chart(df: pd.DataFrame, x_key: str, y_key: str, title: str = None) -> alt.Chart:
+    # Determine data types for encoding
+    if pd.api.types.is_datetime64_any_dtype(df[x_key]):
+        x_type = 'T'
+    elif pd.api.types.is_numeric_dtype(df[x_key]):
+        x_type = 'Q'
+    else:
+        x_type = 'N'
 
-    # Determine a reasonable width based on number of categories
-    categories = long_df[x_key].unique().tolist()
-    width = max(300, 80 * len(categories))
+    y_type = 'Q' if pd.api.types.is_numeric_dtype(df[y_key]) else 'N'
+
+    # Axis formatting
+    y_axis = None
+    y_title = title if title else y_key.replace('_', ' ').title()
+    if y_type == 'Q':
+        if y_key.lower() in ['total_sales', 'sales', 'amount', 'revenue']:
+            y_axis = alt.Axis(format='$,.2f', title=y_title)
+        elif pd.api.types.is_integer_dtype(df[y_key]):
+            y_axis = alt.Axis(format=',d', title=y_title)
+        else:
+            y_axis = alt.Axis(format=',.2f', title=y_title)
+    else:
+        y_axis = alt.Axis(title=y_title)
+
+    # Sort by x if temporal
+    sort_df = df.sort_values(by=[x_key]) if x_type in ['T', 'Q'] else df.copy()
+
+    tooltip = [
+        alt.Tooltip(f'{x_key}:{x_type}', title=x_key.replace('_', ' ').title()),
+        alt.Tooltip(f'{y_key}:{y_type}', title=y_title)
+    ]
 
     chart = (
-        alt.Chart(long_df)
-        .mark_bar()
+        alt.Chart(sort_df)
+        .mark_line(point=True)
         .encode(
-            x=alt.X(f"{x_key}:N", title=x_key),
-            y=alt.Y("value:Q", title="Value"),
-            color=alt.Color("metric:N", title="Metric"),
-            xOffset=alt.XOffset("metric:N"),
-            tooltip=[alt.Tooltip(f"{x_key}:N", title=x_key), alt.Tooltip("metric:N"), alt.Tooltip("value:Q")],
+            x=alt.X(f'{x_key}:{x_type}', title=x_key.replace('_', ' ').title()),
+            y=alt.Y(f'{y_key}:{y_type}', axis=y_axis),
+            tooltip=tooltip,
+            color=alt.value('#1f77b4')
         )
-        .properties(width=width, height=400, title=title)
+        .properties(height=320, title=y_title)
     )
-    st.altair_chart(chart, use_container_width=True)
-
-
-def render_bar(df: pd.DataFrame, x_key: str, y_key: str, title: str = None, color_key: str = None):
-    chart = (
-        alt.Chart(df)
-        .mark_bar()
-        .encode(
-            x=alt.X(f"{x_key}:N", title=x_key),
-            y=alt.Y(f"{y_key}:Q", title=y_key),
-            color=(alt.Color(f"{color_key}:N") if color_key else alt.value("steelblue")),
-            tooltip=[alt.Tooltip(f"{x_key}:N", title=x_key), alt.Tooltip(f"{y_key}:Q", title=y_key)],
-        )
-        .properties(height=400, title=title)
-    )
-    st.altair_chart(chart, use_container_width=True)
-
-
-def render_pie(df: pd.DataFrame, category_key: str, value_key: str, title: str = None):
-    chart = (
-        alt.Chart(df)
-        .mark_arc(innerRadius=40)
-        .encode(
-            theta=alt.Theta(f"{value_key}:Q", title=value_key),
-            color=alt.Color(f"{category_key}:N", title=category_key),
-            tooltip=[alt.Tooltip(f"{category_key}:N", title=category_key), alt.Tooltip(f"{value_key}:Q", title=value_key)],
-        )
-        .properties(height=400, title=title)
-    )
-    st.altair_chart(chart, use_container_width=True)
+    return chart
 
 
 # -----------------------------
-# Render Summary
+# Streamlit App
 # -----------------------------
-st.subheader("Summary")
-if REPORT.get("summary"):
-    for item in REPORT["summary"]:
-        st.markdown(f"- {item}")
-else:
-    st.info("No summary available.")
+st.set_page_config(page_title='AI Report Dashboard', page_icon='📊', layout='wide')
 
-# -----------------------------
-# Render Tables
-# -----------------------------
-st.subheader("Tables")
-base_df = None
-if REPORT.get("tables"):
-    for idx, tbl in enumerate(REPORT["tables"], start=1):
-        df = to_dataframe(tbl)
-        if base_df is None:
-            base_df = df.copy()
-        table_name = tbl.get("name") or f"Table {idx}"
-        st.markdown(f"**{table_name}**")
-        st.dataframe(df, use_container_width=True)
-else:
-    st.info("No tables provided in the report.")
+st.title('AI Report Dashboard')
 
-# -----------------------------
-# Render Charts (Altair)
-# -----------------------------
-st.subheader("Charts")
-if REPORT.get("charts"):
-    if base_df is None and REPORT.get("tables"):
-        # Fallback: build from first table
-        base_df = to_dataframe(REPORT["tables"][0])
+# Summary
+if REPORT_DATA.get('summary'):
+    st.header('Summary')
+    for item in REPORT_DATA['summary']:
+        st.markdown(f'- {item}')
 
-    for ch in REPORT["charts"]:
-        ch_type = (ch.get("type") or "").lower()
-        ch_id = ch.get("id") or "chart"
-        spec = ch.get("spec", {})
+# Tables
+dfs = []
+if REPORT_DATA.get('tables'):
+    st.header('Tables')
+    for idx, tbl in enumerate(REPORT_DATA['tables']):
+        df_tbl = build_dataframe(tbl)
+        dfs.append(df_tbl)
+        st.subheader(tbl.get('name', f'Table {idx + 1}'))
+        st.dataframe(df_tbl, use_container_width=True)
 
-        with st.container():
-            st.markdown(f"**Chart: {ch_id}**")
-            if ch_type == "groupedbar":
-                x_key = spec.get("xKey")
-                series = spec.get("series", [])
-                if base_df is None:
-                    st.warning("No base data available for grouped bar chart.")
-                elif not x_key or not series:
-                    st.warning("Grouped bar chart spec missing xKey or series.")
-                else:
-                    # Ensure x_key exists and numeric columns are numeric
-                    df_chart = base_df.copy()
-                    if x_key not in df_chart.columns:
-                        st.warning(f"xKey '{x_key}' not found in data.")
-                    else:
-                        render_grouped_bar(df_chart, x_key=x_key, series=series, title=None)
+# Choose a primary DataFrame for charts (use first table by default)
+base_df = dfs[0] if len(dfs) > 0 else pd.DataFrame()
 
-            elif ch_type == "bar":
-                x_key = spec.get("xKey")
-                y_key = spec.get("yKey")
-                color_key = spec.get("colorKey")
-                if base_df is None:
-                    st.warning("No base data available for bar chart.")
-                elif not x_key or not y_key:
-                    st.warning("Bar chart spec missing xKey or yKey.")
-                else:
-                    df_chart = base_df.copy()
-                    render_bar(df_chart, x_key=x_key, y_key=y_key, title=None, color_key=color_key)
+# Charts
+if REPORT_DATA.get('charts') and not base_df.empty:
+    st.header('Charts')
+    for chart_def in REPORT_DATA['charts']:
+        ctype = chart_def.get('type', '').lower()
+        spec = chart_def.get('spec', {})
+        x_key = spec.get('xKey')
+        y_key = spec.get('yKey')
+        series_name = None
+        series = spec.get('series') or []
+        if isinstance(series, list) and len(series) > 0:
+            series_name = series[0].get('name')
 
-            elif ch_type == "pie":
-                cat_key = spec.get("categoryKey") or spec.get("xKey")
-                val_key = spec.get("valueKey") or spec.get("yKey")
-                if base_df is None:
-                    st.warning("No base data available for pie chart.")
-                elif not cat_key or not val_key:
-                    st.warning("Pie chart spec missing categoryKey/xKey or valueKey/yKey.")
-                else:
-                    df_chart = base_df.copy()
-                    render_pie(df_chart, category_key=cat_key, value_key=val_key, title=None)
+        if ctype == 'line' and x_key and y_key and x_key in base_df.columns and y_key in base_df.columns:
+            chart = make_line_chart(base_df, x_key, y_key, title=series_name)
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info(f"Chart '{chart_def.get('id', 'chart')}' could not be rendered due to missing fields or unsupported type.")
 
-            else:
-                st.info(f"Chart type '{ch.get('type')}' not recognized. Supported: groupedBar, bar, pie.")
-else:
-    st.info("No charts provided in the report.")
+# Echo / Source details
+if REPORT_DATA.get('echo'):
+    with st.expander('Source details'):
+        echo = REPORT_DATA['echo']
+        st.write('Intent:', echo.get('intent'))
+        used = echo.get('used') or {}
+        if used:
+            st.write('Used tables:', used.get('tables'))
+            st.write('Used columns:', used.get('columns'))
+        stats = echo.get('stats') or {}
+        if stats:
+            st.write('Stats:', stats)
+        st.write('SQL present:', echo.get('sql_present'))
 
-# -----------------------------
-# Optional: Show data provenance / echo
-# -----------------------------
-with st.expander("Report Metadata / Provenance", expanded=False):
-    st.write({k: v for k, v in REPORT.items() if k in ["valid", "issues"]})
-    echo = REPORT.get("echo") or {}
-    if echo:
-        st.write(echo)
-
-st.caption("Built with Streamlit, Pandas, and Altair.")
+st.caption('Generated by AI Report App Builder')

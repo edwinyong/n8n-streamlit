@@ -1,422 +1,255 @@
-import json
-from typing import Any, Dict, List, Optional, Tuple
-
-import altair as alt
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import altair as alt
+from typing import Any, Dict, List, Optional
 
-
-# ------------------------------------------------------------
-# Streamlit App: AI Report Viewer
-# ------------------------------------------------------------
-# This app renders a provided JSON report, displaying:
-# - Summary (markdown)
-# - Tables (as st.dataframe)
-# - Charts (with Altair: pie, bar, line, area, scatter)
-# The report used below is embedded from the provided JSON input.
-# ------------------------------------------------------------
-
-st.set_page_config(page_title="AI Report Viewer", layout="wide")
-alt.data_transformers.disable_max_rows()
-
-# Embedded default report (from the user-provided JSON)
-DEFAULT_REPORT: Dict[str, Any] = {
-    "valid": True,
-    "issues": [],
-    "summary": [
-        "No data available for SKU performance analysis."
+# Embedded report JSON converted to a Python dict
+REPORT: Dict[str, Any] = {
+    "valid": False,
+    "issues": [
+        {
+            "code": "missing_column",
+            "severity": "error",
+            "message": "Requested time-based comparison cannot be computed because the dataset head does not include a date/time column."
+        }
     ],
-    "tables": [],
+    "summary": [
+        "Cannot compare registered users and sales between 2025 Q1 and Q2 due to missing date or time columns in the dataset."
+    ],
+    "tables": [
+        {
+            "name": "Table",
+            "columns": ["value"],
+            "rows": [[0]]
+        }
+    ],
     "charts": [],
     "echo": {
         "intent": "single_number",
         "used": {"tables": [""], "columns": []},
-        "stats": {"elapsed": 0.001811491},
-        "sql_present": True,
-    },
+        "stats": {"elapsed": 0.00128717},
+        "sql_present": True
+    }
 }
 
+st.set_page_config(page_title="AI Report Viewer", layout="wide")
+st.title("AI Report Viewer")
 
-# ------------------------- Utilities -------------------------
+# Helper: map issues to appropriate Streamlit call
+SEVERITY_TO_ST = {
+    "error": st.error,
+    "warning": st.warning,
+    "info": st.info,
+}
 
-def _to_dataframe(obj: Any) -> Optional[pd.DataFrame]:
-    """Best-effort conversion of various table-like structures to a DataFrame.
-
-    Supports:
-    - list[dict]
-    - dict with keys {"columns", "rows"}
-    - dict with key "data" (list[dict] or list[list])
-    - dict mapping column -> list
-    - list[list] (requires separate columns key in same dict; handled by caller)
-    """
+# Helper: build a dataframe from a table-like spec
+def table_to_df(tbl: Dict[str, Any]) -> pd.DataFrame:
+    cols = tbl.get("columns", [])
+    rows = tbl.get("rows", [])
     try:
-        if obj is None:
+        df = pd.DataFrame(rows, columns=cols)
+    except Exception:
+        # Fallback if malformed
+        df = pd.DataFrame(rows)
+        if cols and len(cols) == df.shape[1]:
+            df.columns = cols
+    return df
+
+# Helper: get a dataframe for a chart spec
+def chart_data_to_df(chart: Dict[str, Any], tables_by_name: Dict[str, pd.DataFrame]) -> Optional[pd.DataFrame]:
+    # Priority: explicit data -> columns/rows -> referenced table name
+    data = chart.get("data")
+    if isinstance(data, list):
+        # list of dicts or list of lists
+        if len(data) > 0 and isinstance(data[0], dict):
+            return pd.DataFrame(data)
+        else:
+            # If also has columns
+            cols = chart.get("columns")
+            if cols:
+                return pd.DataFrame(data, columns=cols)
+            return pd.DataFrame(data)
+    if "columns" in chart and "rows" in chart:
+        return pd.DataFrame(chart.get("rows", []), columns=chart.get("columns", []))
+    # Refer to a table by name or key
+    ref_keys = ["table", "source", "source_table", "name"]
+    for key in ref_keys:
+        if key in chart and isinstance(chart[key], str):
+            ref = chart[key]
+            if ref in tables_by_name:
+                return tables_by_name[ref]
+    # Fallback: if only one table exists, use it
+    if len(tables_by_name) == 1:
+        return list(tables_by_name.values())[0]
+    return None
+
+# Helper: render a chart with Altair
+def render_chart(chart: Dict[str, Any], df: pd.DataFrame) -> Optional[alt.Chart]:
+    if df is None or df.empty:
+        return None
+
+    chart_type = str(chart.get("type", "bar")).lower()
+    title = chart.get("title")
+
+    # Encoding hints
+    x = chart.get("x")
+    y = chart.get("y")
+    color = chart.get("color")
+    size = chart.get("size")
+    tooltip = chart.get("tooltip")
+    column = chart.get("column")  # for faceting
+    row = chart.get("row")        # for faceting
+    order = chart.get("order")
+
+    # Sensible defaults if not provided
+    cols = list(df.columns)
+    if x is None and len(cols) >= 1:
+        x = cols[0]
+    if y is None and len(cols) >= 2:
+        y = cols[1]
+
+    # Build base chart
+    base = alt.Chart(df).properties(title=title)
+
+    # Build encodings
+    encodings = {}
+    if x is not None and x in df.columns:
+        encodings['x'] = alt.X(x)
+    if y is not None and y in df.columns:
+        encodings['y'] = alt.Y(y)
+    if color is not None and color in df.columns:
+        encodings['color'] = alt.Color(color)
+    if size is not None and size in df.columns:
+        encodings['size'] = alt.Size(size)
+    if order is not None and order in df.columns:
+        encodings['order'] = alt.Order(order)
+    if tooltip is not None:
+        if isinstance(tooltip, list):
+            encodings['tooltip'] = [alt.Tooltip(t) for t in tooltip if t in df.columns]
+        elif isinstance(tooltip, str) and tooltip in df.columns:
+            encodings['tooltip'] = alt.Tooltip(tooltip)
+
+    # Create chart according to type
+    chart_obj: Optional[alt.Chart] = None
+
+    if chart_type in ["bar", "column"]:
+        chart_obj = base.mark_bar().encode(**encodings)
+    elif chart_type in ["line"]:
+        chart_obj = base.mark_line(point=True).encode(**encodings)
+    elif chart_type in ["area"]:
+        chart_obj = base.mark_area().encode(**encodings)
+    elif chart_type in ["scatter", "point"]:
+        if 'size' not in encodings and x and y:
+            # Provide a default point size if not specified
+            chart_obj = base.mark_point(filled=True, size=60).encode(**encodings)
+        else:
+            chart_obj = base.mark_point(filled=True).encode(**encodings)
+    elif chart_type in ["pie", "donut", "arc"]:
+        # Determine fields for pie
+        # Prefer y as value and x as category; if not, guess two columns
+        category_field = x if x in df.columns else (cols[0] if len(cols) >= 1 else None)
+        value_field = y if y in df.columns else (cols[1] if len(cols) >= 2 else None)
+        if category_field is None or value_field is None:
+            # Cannot build pie chart without two fields
             return None
-
-        # If it's already a DataFrame
-        if isinstance(obj, pd.DataFrame):
-            return obj
-
-        # list of dicts
-        if isinstance(obj, list):
-            if len(obj) == 0:
-                return pd.DataFrame()
-            if isinstance(obj[0], dict):
-                return pd.DataFrame(obj)
-            # list of lists without headers: create index-based columns
-            if isinstance(obj[0], (list, tuple)):
-                max_len = max(len(r) if hasattr(r, "__len__") else 0 for r in obj)
-                cols = [f"col_{i}" for i in range(max_len)]
-                return pd.DataFrame([list(r) for r in obj], columns=cols)
-
-        # dict with columns & rows
-        if isinstance(obj, dict):
-            if "columns" in obj and "rows" in obj:
-                cols = obj.get("columns") or []
-                rows = obj.get("rows") or []
-                # rows could be list[dict] or list[list]
-                if rows and isinstance(rows[0], dict):
-                    return pd.DataFrame(rows)[cols] if cols else pd.DataFrame(rows)
-                return pd.DataFrame(rows, columns=cols if cols else None)
-
-            # dict with data key
-            if "data" in obj:
-                data = obj.get("data")
-                if isinstance(data, list):
-                    if len(data) == 0:
-                        return pd.DataFrame()
-                    if isinstance(data[0], dict):
-                        return pd.DataFrame(data)
-                    if isinstance(data[0], (list, tuple)):
-                        max_len = max(len(r) if hasattr(r, "__len__") else 0 for r in data)
-                        cols = obj.get("columns") or [f"col_{i}" for i in range(max_len)]
-                        return pd.DataFrame([list(r) for r in data], columns=cols)
-
-            # dict mapping column -> list
-            # Avoid treating general metadata dicts as tables by checking for list values
-            if any(isinstance(v, list) for v in obj.values()):
-                return pd.DataFrame(obj)
-
-        # Fallback: try direct DataFrame construction
-        return pd.DataFrame(obj)
-    except Exception:
-        return None
-
-
-def _infer_fields_for_chart(df: pd.DataFrame) -> Dict[str, Optional[str]]:
-    """Infer sensible default fields for charts when not explicitly provided.
-
-    Returns a dict with potential keys: category, value, x, y, color.
-    """
-    fields = {"category": None, "value": None, "x": None, "y": None, "color": None}
-    if df is None or df.empty:
-        return fields
-
-    # Identify numeric vs non-numeric columns
-    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    non_numeric_cols = [c for c in df.columns if c not in numeric_cols]
-
-    # Prefer the first non-numeric as category, first numeric as value
-    fields["category"] = non_numeric_cols[0] if non_numeric_cols else (df.columns[0] if len(df.columns) > 0 else None)
-    fields["value"] = numeric_cols[0] if numeric_cols else (df.columns[1] if len(df.columns) > 1 else None)
-
-    # For x/y, prefer category on x and numeric on y
-    fields["x"] = fields["category"]
-    fields["y"] = fields["value"]
-
-    # If we have another non-numeric, set as color
-    if len(non_numeric_cols) > 1:
-        fields["color"] = non_numeric_cols[1]
-
-    return fields
-
-
-def render_summary(summary: Any) -> None:
-    st.header("Summary")
-    if not summary:
-        st.info("No summary provided in the report.")
-        return
-
-    # summary may be a list of markdown strings or a single string
-    if isinstance(summary, list):
-        for s in summary:
-            if isinstance(s, str) and s.strip():
-                st.markdown(s)
-    elif isinstance(summary, str):
-        st.markdown(summary)
+        pie_enc = {
+            'theta': alt.Theta(field=value_field, type='quantitative'),
+            'color': alt.Color(field=category_field, type='nominal')
+        }
+        if tooltip is not None:
+            if isinstance(tooltip, list):
+                pie_enc['tooltip'] = [alt.Tooltip(t) for t in tooltip if t in df.columns]
+            elif isinstance(tooltip, str) and tooltip in df.columns:
+                pie_enc['tooltip'] = alt.Tooltip(tooltip)
+        arc = base.mark_arc(innerRadius=0 if chart_type == 'pie' else 50).encode(**pie_enc)
+        chart_obj = arc
     else:
-        st.write(summary)
+        # Default to bar if unknown type
+        chart_obj = base.mark_bar().encode(**encodings)
 
+    # Faceting if requested
+    if (column and column in df.columns) or (row and row in df.columns):
+        facet = {}
+        if column and column in df.columns:
+            facet['column'] = alt.Column(column)
+        if row and row in df.columns:
+            facet['row'] = alt.Row(row)
+        chart_obj = chart_obj.facet(**facet)
 
-def render_tables(tables: Any) -> None:
-    st.header("Tables")
-    if not tables:
-        st.info("No tables in the report.")
-        return
+    return chart_obj
 
-    # tables may be a list of table objects or a single object
-    if not isinstance(tables, list):
-        tables = [tables]
+# Build a name->DataFrame map for tables
+@st.cache_data(show_spinner=False)
+def load_tables(report: Dict[str, Any]) -> Dict[str, pd.DataFrame]:
+    tables = report.get("tables", [])
+    mapping: Dict[str, pd.DataFrame] = {}
+    for i, tbl in enumerate(tables):
+        name = tbl.get("name") or f"Table {i+1}"
+        mapping[name] = table_to_df(tbl)
+    return mapping
 
-    for idx, t in enumerate(tables, start=1):
-        title = None
-        df = None
+# Display header info and issues
+if not REPORT.get("valid", True):
+    st.warning("Report is marked as invalid. See issues below.")
 
-        if isinstance(t, dict):
-            title = t.get("title") or t.get("name") or f"Table {idx}"
-            df = _to_dataframe(t.get("data") if "data" in t else t)
-        else:
-            title = f"Table {idx}"
-            df = _to_dataframe(t)
-
-        st.subheader(title)
-        if df is None:
-            st.warning("Unable to parse this table into a dataframe.")
-        else:
-            st.dataframe(df, use_container_width=True)
-
-
-def _build_altair_chart(chart_spec: Dict[str, Any]) -> Optional[alt.Chart]:
-    """Create an Altair chart from a generic chart spec using best-effort heuristics."""
-    # Extract data
-    data_obj = chart_spec.get("data", chart_spec.get("dataset"))
-    df = _to_dataframe(data_obj)
-    if df is None or df.empty:
-        # If the spec references a named table present elsewhere, support minimal lookup
-        source_table_name = chart_spec.get("table")
-        if source_table_name and isinstance(APP_STATE.get("tables_map"), dict):
-            ref = APP_STATE["tables_map"].get(source_table_name)
-            if isinstance(ref, pd.DataFrame) and not ref.empty:
-                df = ref
-    if df is None or df.empty:
-        return None
-
-    # Determine chart type
-    ctype = (chart_spec.get("type") or chart_spec.get("chart") or "bar").lower()
-
-    # Determine encodings
-    enc = chart_spec.get("encoding", {})
-    inferred = _infer_fields_for_chart(df)
-
-    # Explicit fields if provided in spec; otherwise inferred
-    x = chart_spec.get("x") or enc.get("x") or inferred["x"]
-    y = chart_spec.get("y") or enc.get("y") or inferred["y"]
-    color = chart_spec.get("color") or enc.get("color") or inferred["color"]
-    category = chart_spec.get("category") or enc.get("category") or inferred["category"]
-    value = chart_spec.get("value") or enc.get("value") or inferred["value"]
-
-    title = chart_spec.get("title")
-
-    # Build chart based on type
-    chart = None
-    try:
-        if ctype in ("pie", "donut", "doughnut"):
-            # For pie, require category and value
-            if not category or not value:
-                return None
-            chart = (
-                alt.Chart(df, title=title)
-                .mark_arc()
-                .encode(
-                    theta=alt.Theta(field=value, type="quantitative"),
-                    color=alt.Color(field=category, type="nominal"),
-                    tooltip=[category, value],
-                )
-            )
-        elif ctype in ("bar", "column"):
-            if not x or not y:
-                return None
-            chart = (
-                alt.Chart(df, title=title)
-                .mark_bar()
-                .encode(
-                    x=alt.X(x, sort=chart_spec.get("x_sort")),
-                    y=alt.Y(y),
-                    color=alt.Color(color) if color else alt.value("steelblue"),
-                    tooltip=[x, y] if x != y else [x],
-                )
-            )
-        elif ctype == "line":
-            if not x or not y:
-                return None
-            chart = (
-                alt.Chart(df, title=title)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X(x, sort=chart_spec.get("x_sort")),
-                    y=alt.Y(y),
-                    color=alt.Color(color) if color else alt.value("#1f77b4"),
-                    tooltip=[x, y] if x != y else [x],
-                )
-            )
-        elif ctype == "area":
-            if not x or not y:
-                return None
-            chart = (
-                alt.Chart(df, title=title)
-                .mark_area(opacity=0.7)
-                .encode(
-                    x=alt.X(x, sort=chart_spec.get("x_sort")),
-                    y=alt.Y(y),
-                    color=alt.Color(color) if color else alt.value("#1f77b4"),
-                    tooltip=[x, y] if x != y else [x],
-                )
-            )
-        elif ctype == "scatter":
-            # Scatter needs two numeric axes; if missing, pick two numeric columns
-            if not x or not y:
-                num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-                if len(num_cols) >= 2:
-                    x = x or num_cols[0]
-                    y = y or num_cols[1]
-            if not x or not y:
-                return None
-            chart = (
-                alt.Chart(df, title=title)
-                .mark_circle(size=60)
-                .encode(
-                    x=x,
-                    y=y,
-                    color=alt.Color(color) if color else alt.value("#2ca02c"),
-                    tooltip=[x, y] if x != y else [x],
-                )
-            )
-        else:
-            # Default to bar
-            if not x or not y:
-                if value and category:
-                    x = category
-                    y = value
-                else:
-                    # pick any two columns
-                    if len(df.columns) >= 2:
-                        x = x or df.columns[0]
-                        y = y or df.columns[1]
-            if not x or not y:
-                return None
-            chart = (
-                alt.Chart(df, title=title)
-                .mark_bar()
-                .encode(
-                    x=alt.X(x, sort=chart_spec.get("x_sort")),
-                    y=alt.Y(y),
-                    color=alt.Color(color) if color else alt.value("steelblue"),
-                    tooltip=[x, y] if x != y else [x],
-                )
-            )
-    except Exception:
-        chart = None
-
-    return chart
-
-
-def render_charts(charts: Any) -> None:
-    st.header("Charts")
-    if not charts:
-        st.info("No charts in the report.")
-        return
-
-    # charts may be a list of chart specs or a single spec
-    if not isinstance(charts, list):
-        charts = [charts]
-
-    for idx, spec in enumerate(charts, start=1):
-        title = None
-        if isinstance(spec, dict):
-            title = spec.get("title") or spec.get("name") or f"Chart {idx}"
-        else:
-            title = f"Chart {idx}"
-
-        st.subheader(title)
-        if not isinstance(spec, dict):
-            st.warning("Unrecognized chart specification format.")
-            continue
-
-        chart = _build_altair_chart(spec)
-        if chart is None:
-            st.warning("Unable to render this chart with the provided data/spec.")
-        else:
-            st.altair_chart(chart.properties(width="container"), use_container_width=True)
-
-
-# ------------------------- App State -------------------------
-APP_STATE: Dict[str, Any] = {}
-
-
-def build_tables_map(tables: Any) -> Dict[str, pd.DataFrame]:
-    """Build a name->DataFrame map for tables to support chart references."""
-    result: Dict[str, pd.DataFrame] = {}
-    if not tables:
-        return result
-
-    if not isinstance(tables, list):
-        tables = [tables]
-
-    for idx, t in enumerate(tables, start=1):
-        name = None
-        df = None
-        if isinstance(t, dict):
-            name = t.get("name") or t.get("title") or f"table_{idx}"
-            df = _to_dataframe(t.get("data") if "data" in t else t)
-        else:
-            name = f"table_{idx}"
-            df = _to_dataframe(t)
-
-        if isinstance(df, pd.DataFrame):
-            result[name] = df
-    return result
-
-
-# ------------------------- Main UI -------------------------
-
-def main() -> None:
-    st.title("AI Report Viewer")
-    st.caption("Render summaries, tables, and charts from a structured JSON report.")
-
-    # Sidebar: allow optional upload or paste of a report JSON to override default
-    st.sidebar.header("Report Source")
-    src_choice = st.sidebar.radio("Select report source:", ["Embedded (default)", "Upload JSON", "Paste JSON"], index=0)
-    report: Dict[str, Any] = DEFAULT_REPORT
-
-    if src_choice == "Upload JSON":
-        uploaded = st.sidebar.file_uploader("Upload report JSON", type=["json"]) 
-        if uploaded is not None:
-            try:
-                report = json.load(uploaded)
-            except Exception as e:
-                st.sidebar.error(f"Failed to parse JSON file: {e}")
-    elif src_choice == "Paste JSON":
-        pasted = st.sidebar.text_area("Paste report JSON here", height=200)
-        if pasted.strip():
-            try:
-                report = json.loads(pasted)
-            except Exception as e:
-                st.sidebar.error(f"Failed to parse pasted JSON: {e}")
-
-    # Validate structure lightly
-    if not isinstance(report, dict):
-        st.error("Invalid report format. Expected a JSON object.")
-        return
-
-    # Store tables map for possible chart references
-    tables_map = build_tables_map(report.get("tables"))
-    APP_STATE["tables_map"] = tables_map
-
-    # Render sections
-    render_summary(report.get("summary"))
-    render_tables(report.get("tables"))
-    render_charts(report.get("charts"))
-
-    # Optional: show issues and raw report
-    issues = report.get("issues")
-    if isinstance(issues, list) and len(issues) > 0:
-        st.header("Issues")
+issues = REPORT.get("issues", [])
+if issues:
+    with st.expander("Issues", expanded=True):
         for issue in issues:
-            st.warning(str(issue))
+            sev = str(issue.get("severity", "info")).lower()
+            fn = SEVERITY_TO_ST.get(sev, st.info)
+            code = issue.get("code", "")
+            msg = issue.get("message", "")
+            fn(f"[{sev.upper()}] {code}: {msg}")
 
-    with st.expander("Debug: Raw Report JSON"):
-        st.json(report)
+# Summary
+st.subheader("Summary")
+summ = REPORT.get("summary", [])
+if isinstance(summ, list) and summ:
+    for s in summ:
+        st.markdown(f"- {s}")
+else:
+    st.info("No summary available.")
 
+# Sidebar: Raw JSON echo and metadata
+with st.sidebar:
+    st.header("Report Metadata")
+    st.caption("High-level info about the report")
+    st.json({
+        "valid": REPORT.get("valid"),
+        "issues_count": len(REPORT.get("issues", [])),
+        "tables_count": len(REPORT.get("tables", [])),
+        "charts_count": len(REPORT.get("charts", [])),
+        "intent": REPORT.get("echo", {}).get("intent"),
+        "elapsed": REPORT.get("echo", {}).get("stats", {}).get("elapsed")
+    })
+    with st.expander("Raw report JSON", expanded=False):
+        st.json(REPORT)
 
-if __name__ == "__main__":
-    main()
+# Tables
+st.subheader("Tables")
+table_map = load_tables(REPORT)
+if not table_map:
+    st.info("No tables to display.")
+else:
+    for name, df in table_map.items():
+        st.markdown(f"#### {name}")
+        st.dataframe(df, use_container_width=True)
+
+# Charts
+st.subheader("Charts")
+charts = REPORT.get("charts", [])
+if not charts:
+    st.info("No charts to display in this report.")
+else:
+    for idx, ch in enumerate(charts, start=1):
+        df = chart_data_to_df(ch, table_map)
+        chart_obj = render_chart(ch, df)
+        chart_title = ch.get("title") or ch.get("name") or f"Chart {idx}"
+        st.markdown(f"#### {chart_title}")
+        if chart_obj is None:
+            st.warning("Chart could not be rendered due to missing or invalid data/encodings.")
+        else:
+            st.altair_chart(chart_obj, use_container_width=True)
+
+st.caption("Rendered with Streamlit, Pandas, and Altair.")

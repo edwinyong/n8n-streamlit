@@ -1,322 +1,177 @@
-import json
-from typing import Dict, Any, List
-
 import streamlit as st
 import pandas as pd
 import altair as alt
+import json
+from typing import Dict, Any, List
 
-# Disable Altair max rows limit for larger datasets
-alt.data_transformers.disable_max_rows()
+st.set_page_config(page_title="AI Report App", layout="wide")
 
-# -------------------------------------------------------------
-# Embedded report data (provided JSON)
-# -------------------------------------------------------------
+# Embedded report JSON (provided by the user)
 REPORT: Dict[str, Any] = {
     "valid": True,
     "issues": [],
     "summary": [
-        "Registered users peaked in February 2025 at 2,093, then declined steadily to 194 by September.",
-        "There is a clear downward trend in monthly registered users from Q1 to Q3 2025."
+        "Registered purchasers dropped by 23.43% from Q1 (4,998) to Q2 (3,826) in 2025.",
+        "Total sales decreased by 19.88% from Q1 (463,266.60) to Q2 (371,077.93) in 2025."
     ],
     "tables": [
         {
             "name": "Table",
-            "columns": [
-                "month",
-                "registered_users"
-            ],
-            "rows": [
-                [
-                    "2025-01-01",
-                    "1416"
-                ],
-                [
-                    "2025-02-01",
-                    "2093"
-                ],
-                [
-                    "2025-03-01",
-                    "1946"
-                ],
-                [
-                    "2025-04-01",
-                    "1621"
-                ],
-                [
-                    "2025-05-01",
-                    "1096"
-                ],
-                [
-                    "2025-06-01",
-                    "1491"
-                ],
-                [
-                    "2025-07-01",
-                    "1036"
-                ],
-                [
-                    "2025-08-01",
-                    "762"
-                ],
-                [
-                    "2025-09-01",
-                    "194"
-                ]
-            ]
+            "columns": ["period", "registered_purchasers", "total_sales"],
+            "rows": [["2025 Q1", "4998", 463266.6000000094], ["2025 Q2", "3826", 371077.9300000016]]
         }
     ],
     "charts": [
         {
-            "id": "monthly_users_trend",
-            "type": "line",
+            "id": "main",
+            "type": "groupedBar",
             "spec": {
-                "xKey": "month",
-                "yKey": "registered_users",
+                "xKey": "period",
+                "yKey": "value",
                 "series": [
-                    {
-                        "name": "Registered Users",
-                        "yKey": "registered_users"
-                    }
+                    {"name": "Registered Purchasers", "yKey": "registered_purchasers"},
+                    {"name": "Total Sales", "yKey": "total_sales"}
                 ]
             }
         }
     ],
     "echo": {
-        "intent": "trend",
+        "intent": "comparison_totals",
         "used": {
-            "tables": [
-                "`Haleon_Rewards_User_Performance_110925_user_list`",
-                "`Haleon_Rewards_User_Performance_110925_SKUs`"
-            ],
-            "columns": [
-                "Upload_Date",
-                "user_id",
-                "comuserid"
-            ]
+            "tables": ["`Haleon_Rewards_User_Performance_110925_SKUs`", "`Haleon_Rewards_User_Performance_110925_user_list`"],
+            "columns": ["Upload_Date", "`Total Sales Amount`", "comuserid", "user_id"]
         },
-        "stats": {
-            "elapsed": 0.026676537
-        },
+        "stats": {"elapsed": 0.045323458},
         "sql_present": True
     }
 }
 
-# -------------------------------------------------------------
-# Utilities
-# -------------------------------------------------------------
+alt.data_transformers.disable_max_rows()
 
-def coerce_dataframe_types(df: pd.DataFrame) -> pd.DataFrame:
-    """Attempt to convert common date and numeric fields to proper dtypes."""
-    df = df.copy()
-    for col in df.columns:
-        low = str(col).lower()
-        # Date-like columns
-        if any(k in low for k in ["date", "month", "time", "timestamp"]):
-            try:
-                df[col] = pd.to_datetime(df[col], errors="coerce")
-            except Exception:
-                pass
-        # Numeric-like columns: try numeric if objects look numeric
-        if df[col].dtype == object:
-            try:
-                # If many values look numeric, coerce
-                sample = df[col].dropna().astype(str).head(20)
-                looks_numeric_ratio = 0.0
-                if not sample.empty:
-                    looks_numeric_ratio = (sample.str.replace(",", "", regex=False)
-                                                  .str.match(r"^[+-]?\d*\.?\d+$")
-                                                  .mean())
-                if looks_numeric_ratio >= 0.6:  # heuristic
-                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", "", regex=False), errors="coerce")
-            except Exception:
-                pass
-    return df
+# Utility functions
+
+def _auto_coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for col in out.columns:
+        # Try converting to numeric when all values are convertible
+        converted = pd.to_numeric(out[col], errors='coerce')
+        if converted.notna().sum() == len(out[col]):
+            out[col] = converted
+    return out
 
 
-def build_dataframes(report: Dict[str, Any]) -> Dict[str, pd.DataFrame]:
-    tables = report.get("tables", [])
-    dfs: Dict[str, pd.DataFrame] = {}
-    for idx, t in enumerate(tables):
-        name = t.get("name") or f"table_{idx+1}"
-        columns: List[str] = t.get("columns", [])
-        rows: List[List[Any]] = t.get("rows", [])
-        df = pd.DataFrame(rows, columns=columns)
-        df = coerce_dataframe_types(df)
-        dfs[name] = df
-    return dfs
-
-
-def pick_dataframe_for_chart(dfs: Dict[str, pd.DataFrame], chart_spec: Dict[str, Any]) -> pd.DataFrame:
-    """Pick a DataFrame that contains the required x and y keys. Fallback to the first df."""
-    x_key = chart_spec.get("spec", {}).get("xKey")
-    y_key = chart_spec.get("spec", {}).get("yKey")
-    for df in dfs.values():
-        if x_key in df.columns and (y_key is None or y_key in df.columns):
-            return df
-    # Fallback: first df
-    if dfs:
-        return list(dfs.values())[0]
-    return pd.DataFrame()
-
-
-def render_chart(df: pd.DataFrame, chart: Dict[str, Any]) -> alt.Chart:
-    ctype = (chart.get("type") or "").lower()
+def _build_grouped_bar(df: pd.DataFrame, chart: Dict[str, Any]) -> alt.Chart:
     spec = chart.get("spec", {})
     x_key = spec.get("xKey")
-    y_key = spec.get("yKey")
-    series = spec.get("series") or []
-    title = series[0].get("name") if series and isinstance(series[0], dict) else None
+    value_key = spec.get("yKey", "value")
+    series = spec.get("series", [])
 
-    # Determine encodings
-    if x_key is None:
-        raise ValueError("Chart spec missing xKey")
-    if ctype != "pie" and y_key is None:
-        raise ValueError("Chart spec missing yKey for non-pie chart")
+    if not x_key or not series:
+        raise ValueError("Invalid groupedBar spec: missing xKey or series")
 
-    # Sort by x for better readability when temporal or numeric
-    df_plot = df.copy()
-    if x_key in df_plot.columns:
+    # Prepare long-form data
+    long_frames: List[pd.DataFrame] = []
+    order = []
+    for s in series:
+        name = s.get("name") or s.get("yKey")
+        y_col = s.get("yKey")
+        order.append(name)
+        if y_col not in df.columns:
+            continue
+        tmp = df[[x_key, y_col]].copy()
+        # Ensure numeric values for y
+        tmp[value_key] = pd.to_numeric(tmp[y_col], errors='coerce')
+        tmp = tmp[[x_key, value_key]]
+        tmp["metric"] = name
+        long_frames.append(tmp)
+
+    if not long_frames:
+        raise ValueError("No valid series columns found for groupedBar chart.")
+
+    long_df = pd.concat(long_frames, ignore_index=True)
+
+    # Build grouped bar using xOffset for grouping by metric
+    chart_alt = (
+        alt.Chart(long_df)
+        .mark_bar()
+        .encode(
+            x=alt.X(f"{x_key}:N", title=x_key, sort=sorted(long_df[x_key].unique())),
+            xOffset=alt.XOffset("metric:N", sort=order),
+            y=alt.Y(f"{value_key}:Q", title="Value", stack=None),
+            color=alt.Color("metric:N", title="Series", sort=order),
+            tooltip=[
+                alt.Tooltip(f"{x_key}:N", title=x_key),
+                alt.Tooltip("metric:N", title="Series"),
+                alt.Tooltip(f"{value_key}:Q", title="Value", format=",.2f"),
+            ],
+        )
+        .properties(height=380)
+    )
+    return chart_alt
+
+
+# App UI
+st.title("AI-Generated Report")
+
+# Summary
+st.header("Summary")
+if REPORT.get("summary"):
+    for item in REPORT["summary"]:
+        st.markdown(f"- {item}")
+else:
+    st.info("No summary available.")
+
+# Tables
+st.header("Tables")
+table_dfs: Dict[str, pd.DataFrame] = {}
+if REPORT.get("tables"):
+    for idx, tbl in enumerate(REPORT["tables"], start=1):
+        name = tbl.get("name") or f"Table {idx}"
+        columns = tbl.get("columns", [])
+        rows = tbl.get("rows", [])
+        df = pd.DataFrame(rows, columns=columns)
+        df = _auto_coerce_numeric(df)
+        table_dfs[name] = df
+
+        # Prepare a display copy with nicer float formatting
+        disp_df = df.copy()
+        float_cols = [c for c in disp_df.columns if pd.api.types.is_float_dtype(disp_df[c])]
+        if float_cols:
+            disp_df[float_cols] = disp_df[float_cols].round(2)
+
+        st.subheader(name)
+        st.dataframe(disp_df, use_container_width=True)
+else:
+    st.info("No tables available.")
+
+# Charts
+st.header("Charts")
+if REPORT.get("charts"):
+    # Choose primary data source: the first table if available
+    if table_dfs:
+        # Use the first table as the primary data source for charts
+        primary_df = next(iter(table_dfs.values()))
+    else:
+        primary_df = pd.DataFrame()
+
+    for chart in REPORT["charts"]:
+        chart_id = chart.get("id", "chart")
+        chart_type = (chart.get("type") or "").lower()
+        st.subheader(f"Chart: {chart_id}")
+
         try:
-            if pd.api.types.is_datetime64_any_dtype(df_plot[x_key]) or pd.api.types.is_numeric_dtype(df_plot[x_key]):
-                df_plot = df_plot.sort_values(by=x_key)
-        except Exception:
-            pass
+            if chart_type in ("groupedbar", "grouped_bar", "groupbar"):
+                ch = _build_grouped_bar(primary_df, chart)
+            else:
+                st.warning(f"Unsupported chart type '{chart.get('type')}'. Rendering as grouped bar if possible.")
+                ch = _build_grouped_bar(primary_df, chart)
 
-    # Build encodings
-    if x_key in df_plot.columns and pd.api.types.is_datetime64_any_dtype(df_plot[x_key]):
-        x_enc = alt.X(x_key + ":T", title=x_key)
-        tooltip_x = alt.Tooltip(x_key + ":T", title=x_key)
-    else:
-        # Decide between nominal/quantitative for x if not datetime
-        if x_key in df_plot.columns and pd.api.types.is_numeric_dtype(df_plot[x_key]):
-            x_enc = alt.X(x_key + ":Q", title=x_key)
-            tooltip_x = alt.Tooltip(x_key + ":Q", title=x_key)
-        else:
-            x_enc = alt.X(x_key + ":N", title=x_key, sort=None)
-            tooltip_x = alt.Tooltip(x_key + ":N", title=x_key)
+            st.altair_chart(ch, use_container_width=True)
+        except Exception as e:
+            st.error(f"Failed to render chart '{chart_id}': {e}")
+else:
+    st.info("No charts available.")
 
-    if y_key is not None:
-        y_enc = alt.Y(y_key + ":Q", title=y_key)
-        tooltip_y = alt.Tooltip(y_key + ":Q", title=y_key)
-    else:
-        y_enc = None
-        tooltip_y = None
-
-    # Create chart by type
-    if ctype == "line":
-        base = alt.Chart(df_plot)
-        chart_obj = base.mark_line(point=True).encode(
-            x=x_enc,
-            y=y_enc,
-            tooltip=[v for v in [tooltip_x, tooltip_y] if v is not None]
-        )
-    elif ctype == "bar":
-        base = alt.Chart(df_plot)
-        chart_obj = base.mark_bar().encode(
-            x=x_enc,
-            y=y_enc,
-            tooltip=[v for v in [tooltip_x, tooltip_y] if v is not None]
-        )
-    elif ctype == "area":
-        base = alt.Chart(df_plot)
-        chart_obj = base.mark_area(opacity=0.6).encode(
-            x=x_enc,
-            y=y_enc,
-            tooltip=[v for v in [tooltip_x, tooltip_y] if v is not None]
-        )
-    elif ctype == "scatter":
-        base = alt.Chart(df_plot)
-        chart_obj = base.mark_point(filled=True).encode(
-            x=x_enc,
-            y=y_enc,
-            tooltip=[v for v in [tooltip_x, tooltip_y] if v is not None]
-        )
-    elif ctype == "pie":
-        # For pie, interpret xKey as category and yKey as value; aggregate if needed
-        category = x_key
-        value = y_key
-        data = df_plot
-        if value is None:
-            # If no value provided, count rows per category
-            data = data.groupby(category, dropna=False).size().reset_index(name="value")
-            theta = alt.Theta("value:Q")
-        else:
-            data = data.groupby(category, dropna=False)[value].sum().reset_index()
-            theta = alt.Theta(f"{value}:Q")
-        chart_obj = alt.Chart(data).mark_arc().encode(
-            theta=theta,
-            color=alt.Color(f"{category}:N", legend=True),
-            tooltip=list(data.columns)
-        )
-    else:
-        # Default to line if unknown
-        base = alt.Chart(df_plot)
-        chart_obj = base.mark_line(point=True).encode(
-            x=x_enc,
-            y=y_enc,
-            tooltip=[v for v in [tooltip_x, tooltip_y] if v is not None]
-        )
-
-    if title:
-        chart_obj = chart_obj.properties(title=title)
-    return chart_obj
-
-
-# -------------------------------------------------------------
-# Streamlit App
-# -------------------------------------------------------------
-
-def main():
-    st.set_page_config(page_title="AI Report Dashboard", layout="wide")
-
-    st.title("AI Report Dashboard")
-
-    # Summary
-    st.subheader("Summary")
-    summary_items = REPORT.get("summary", [])
-    if summary_items:
-        for item in summary_items:
-            st.markdown(f"- {item}")
-    else:
-        st.info("No summary provided.")
-
-    # Tables
-    st.subheader("Tables")
-    dfs = build_dataframes(REPORT)
-    if dfs:
-        for name, df in dfs.items():
-            st.markdown(f"#### {name}")
-            st.dataframe(df, use_container_width=True)
-    else:
-        st.info("No tables available.")
-
-    # Charts
-    st.subheader("Charts")
-    charts = REPORT.get("charts", [])
-    if charts:
-        for ch in charts:
-            df_for_chart = pick_dataframe_for_chart(dfs, ch)
-            try:
-                chart_obj = render_chart(df_for_chart, ch)
-                st.altair_chart(chart_obj, use_container_width=True)
-            except Exception as e:
-                st.error(f"Failed to render chart {ch.get('id')}: {e}")
-    else:
-        st.info("No charts available.")
-
-    # Validation and debug info
-    with st.expander("Validation and Debug Info"):
-        st.write("Valid:", REPORT.get("valid"))
-        issues = REPORT.get("issues", [])
-        if issues:
-            st.write("Issues:")
-            for i in issues:
-                st.write("-", i)
-        else:
-            st.write("Issues: None")
-        st.write("Echo:")
-        st.json(REPORT.get("echo", {}))
-
-
-if __name__ == "__main__":
-    main()
+# Optional: Raw JSON in an expander for transparency
+with st.expander("View raw JSON report"):
+    st.code(json.dumps(REPORT, indent=2), language="json")

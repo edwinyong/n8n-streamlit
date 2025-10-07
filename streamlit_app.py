@@ -1,139 +1,96 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from io import StringIO
+from datetime import datetime
 
-# ---------------------------
-# Data (from provided JSON)
-# ---------------------------
-TABLE_NAME = "Table"
-COLUMNS = ["period", "registered_purchasers", "total_sales"]
-ROWS = [
-    ["2025 Q1", "4998", 463266.6000000094],
-    ["2025 Q2", "3826", 371077.9300000016],
-]
+# Page config
+st.set_page_config(page_title="AI Report - Sales 2025", layout="wide")
 
-# Build DataFrame
-df = pd.DataFrame(ROWS, columns=COLUMNS)
-# Ensure correct dtypes
-df["registered_purchasers"] = df["registered_purchasers"].astype(int)
-df["total_sales"] = df["total_sales"].astype(float)
-
-# ---------------------------
-# Streamlit App
-# ---------------------------
-st.set_page_config(page_title="AI Report - Comparison Totals", layout="wide")
-
-st.title("AI Report — Comparison Totals (2025 Q1 vs Q2)")
-
-# Summary (from provided JSON summary list)
+# --- Report summary (from JSON input) ---
 summary_lines = [
-    "Registered purchasers decreased by 23.43% from Q1 (4,998) to Q2 (3,826) in 2025.",
-    "Total sales dropped by 19.88% from Q1 (463,266.60) to Q2 (371,077.93) in 2025.",
+    "Sales in 2025 showed a strong start with a peak in February (181,249.13), followed by a steady decline to September (18,826.01).",
+    "Highest sales months: February and March; lowest: September."
 ]
 
-st.subheader("Summary")
-for s in summary_lines:
-    st.markdown(f"- {s}")
+st.title("AI Report: Monthly Sales — 2025")
+st.markdown("\n".join([f"- {s}" for s in summary_lines]))
 
-st.markdown("---")
+# --- Data (tables from JSON input) ---
+# Table: Monthly Sales 2025
+monthly_sales_rows = [
+    ["2025-01-01", 119626.18999999885],
+    ["2025-02-01", 181249.12999999718],
+    ["2025-03-01", 162391.27999999782],
+    ["2025-04-01", 122584.14999999863],
+    ["2025-05-01", 110036.75999999886],
+    ["2025-06-01", 138457.01999999848],
+    ["2025-07-01", 101228.30999999943],
+    ["2025-08-01", 90910.37999999947],
+    ["2025-09-01", 18826.00999999998]
+]
 
-# Display original table
-st.subheader(f"{TABLE_NAME}")
-st.dataframe(df.style.format({
-    "registered_purchasers": "{:,}",
-    "total_sales": "${:,.2f}"
-}), use_container_width=True)
+monthly_sales_columns = ["month", "total_sales"]
 
-# Provide CSV download
-csv_buffer = StringIO()
-df.to_csv(csv_buffer, index=False)
-csv_bytes = csv_buffer.getvalue().encode('utf-8')
-st.download_button("Download table as CSV", data=csv_bytes, file_name="table.csv", mime="text/csv")
+df_monthly = pd.DataFrame(monthly_sales_rows, columns=monthly_sales_columns)
+# Parse month to datetime
+df_monthly["month"] = pd.to_datetime(df_monthly["month"])  # dtype: datetime64[ns]
 
-st.markdown("---")
+# Sort by month just in case
+df_monthly = df_monthly.sort_values("month").reset_index(drop=True)
 
-# ---------------------------
-# Chart: Grouped bar (Altair)
-# ---------------------------
-st.subheader("Grouped Comparison Chart")
-st.markdown("This grouped bar chart shows Registered Purchasers and Total Sales by period.\n\nNote: Total Sales are shown in thousands (K) on the chart to keep the scale comparable to Registered Purchasers.")
+# Display table
+st.subheader("Monthly Sales 2025")
+st.dataframe(df_monthly.style.format({"total_sales": "${:,.2f}"}), height=300)
 
-# Prepare data for grouped bar with scaling for total_sales
-melted = df.melt(id_vars=["period"], value_vars=["registered_purchasers", "total_sales"],
-                 var_name="metric", value_name="raw_value")
+# Quick stats (highest/lowest months)
+max_row = df_monthly.loc[df_monthly["total_sales"].idxmax()]
+min_row = df_monthly.loc[df_monthly["total_sales"].idxmin()]
 
-# Create a scaled plotting value so both series can appear together reasonably
-# registered_purchasers -> plotted as-is
-# total_sales -> plotted in thousands (divide by 1000)
+col1, col2, col3 = st.columns(3)
+col1.metric("Peak month", max_row["month"].strftime("%B %Y"), f"${max_row['total_sales']:,.2f}")
+col2.metric("Lowest month", min_row["month"].strftime("%B %Y"), f"${min_row['total_sales']:,.2f}")
+col3.metric("Total (Jan-Sep)", "", f"${df_monthly['total_sales'].sum():,.2f}")
 
-def compute_scaled_value(row):
-    if row["metric"] == "total_sales":
-        return row["raw_value"] / 1000.0
-    else:
-        return float(row["raw_value"])
+# --- Charts (Altair) ---
+st.subheader("Sales Trend — Line Chart")
 
-melted["value"] = melted.apply(compute_scaled_value, axis=1)
-
-# Add display strings for tooltip
-def format_display(row):
-    if row["metric"] == "total_sales":
-        return f"${row['raw_value']:,.2f}"
-    else:
-        return f"{int(row['raw_value']):,}"
-
-melted["display"] = melted.apply(format_display, axis=1)
-
-# Replace metric names with friendly labels
-metric_friendly = {
-    "registered_purchasers": "Registered Purchasers",
-    "total_sales": "Total Sales"
-}
-
-melted["metric_label"] = melted["metric"].map(metric_friendly)
-
-# Use Altair grouped bar with xOffset for grouping
-chart = alt.Chart(melted).mark_bar().encode(
-    x=alt.X('period:N', title='Period'),
-    xOffset='metric_label:N',  # groups bars side-by-side
-    y=alt.Y('value:Q', title='Value (Registered Purchasers and Total Sales in K)'),
-    color=alt.Color('metric_label:N', title='Metric'),
-    tooltip=[alt.Tooltip('period:N', title='Period'),
-             alt.Tooltip('metric_label:N', title='Metric'),
-             alt.Tooltip('display:N', title='Value')]
+# Prepare data for Altair
+# Altair handles pandas datetime types for temporal X encoding
+chart = alt.Chart(df_monthly).mark_line(point=True, interpolate='monotone').encode(
+    x=alt.X('month:T', title='Month'),
+    y=alt.Y('total_sales:Q', title='Total Sales', axis=alt.Axis(format='$,') ),
+    tooltip=[
+        alt.Tooltip('month:T', title='Month', format='%Y-%m'),
+        alt.Tooltip('total_sales:Q', title='Total Sales', format='$,.2f')
+    ]
 ).properties(
-    width=700,
-    height=420,
-    title='Registered Purchasers vs Total Sales (Total Sales shown in thousands)'
-).configure_title(
-    fontSize=16,
-    anchor='start'
+    width=900,
+    height=400
+).interactive()
+
+# Add an area under the line for emphasis
+area = alt.Chart(df_monthly).mark_area(opacity=0.1, interpolate='monotone').encode(
+    x='month:T',
+    y='total_sales:Q'
 )
 
-st.altair_chart(chart, use_container_width=True)
+combined = area + chart
+st.altair_chart(combined, use_container_width=True)
 
-# Provide an alternate separate chart for Total Sales (absolute) for clarity
+# Optionally show the underlying data as CSV download
+csv = df_monthly.to_csv(index=False)
+st.download_button("Download monthly sales CSV", data=csv, file_name="monthly_sales_2025.csv", mime="text/csv")
+
+# Echo / metadata from the JSON input (for reference)
+with st.expander("Source & echo information"):
+    st.write("Intent: trend")
+    st.write({
+        "used_tables": ["Haleon_Rewards_User_Performance_110925_SKUs"],
+        "used_columns": ["Upload_Date", "Total Sales Amount"],
+        "sql_present": True,
+        "elapsed_seconds": 0.010482119
+    })
+
+# Footer
 st.markdown("---")
-st.subheader("Total Sales (Absolute) — Line & Points")
-line = alt.Chart(df).transform_fold(
-    fold=['total_sales'], as_=['metric', 'value']
-).mark_line(point=True).encode(
-    x=alt.X('period:N', title='Period'),
-    y=alt.Y('value:Q', title='Total Sales (USD)', axis=alt.Axis(format='$,')).scale(domain=[0, None]),
-    color=alt.value('#1f77b4'),
-    tooltip=[alt.Tooltip('period:N', title='Period'), alt.Tooltip('total_sales:Q', title='Total Sales', format='$,.2f')]
-).properties(width=700, height=360)
-
-st.altair_chart(line, use_container_width=True)
-
-# Echo of metadata (from provided JSON echo)
-st.markdown("---")
-with st.expander("Query metadata and echo (from input)"):
-    st.markdown("**Intent:** comparison_totals")
-    st.markdown("**Used tables:** `Haleon_Rewards_User_Performance_110925_SKUs`, `Haleon_Rewards_User_Performance_110925_user_list`")
-    st.markdown("**Used columns:** Upload_Date, Total Sales Amount, comuserid, user_id")
-    st.markdown("**SQL present:** Yes")
-    st.markdown("**Elapsed (s):** 0.068185551")
-
-st.markdown("---")
-st.caption("Generated by AI Report App - repository: edwinyong/ai-report-app-20251001-0235")
+st.markdown("Generated by AI report-to-Streamlit converter.")

@@ -6,7 +6,7 @@ import streamlit as st
 from typing import Any, Dict, List, Optional
 
 # default webhook
-DEFAULT_WEBHOOK = "https://d-target-sb.d-rive.click/webhook/ai-data-analysis-streamlit"
+DEFAULT_WEBHOOK = "https://d-target-sb.d-rive.click/webhook/ai-data-analysis-v2"
 
 
 def _post_with_retry(

@@ -102,37 +102,39 @@ def render_chat_widget_modern(
     """
     _init_state(default_open)
 
-    # ----- presets default -----
+        # ----- presets default -----
     if presets is None:
         presets = [
             {
                 "label": "Weekly performance by brand",
                 "template": (
-                    "Generate weekly performance of buyers, purchases, total sales, and total units by Brand "
-                    "from `Haleon_Rewards_User_Performance_110925_SKUs`. "
-                    "Use Upload_Date for weekly bucket."
+                    "Generate weekly performance including buyers purchases total sales and total units grouped by Brand "
+                    "using Upload_Date for the weekly bucket from the table Haleon_Rewards_User_Performance_110925_SKUs."
                 ),
             },
             {
                 "label": "Overall totals",
                 "template": (
-                    "Compute overall totals: purchases (distinct receiptid), total sales (sum `Total Sales Amount`), "
-                    "total units (sum Total_Purchase_Units), buyers (uniqExact comuserid)."
+                    "Compute overall totals including purchases counted as distinct receiptid total sales as the sum of Total Sales Amount "
+                    "total units as the sum of Total_Purchase_Units and buyers as the unique count of comuserid from the table Haleon_Rewards_User_Performance_110925_SKUs."
                 ),
             },
             {
                 "label": "Monthly sales and units by brand",
                 "template": (
-                    "Show monthly totals by Brand (month from Upload_Date): purchases, total sales, total units, buyers."
+                    "Show monthly totals grouped by Brand using Upload_Date for the month bucket including purchases total sales total units and buyers "
+                    "from the table Haleon_Rewards_User_Performance_110925_SKUs."
                 ),
             },
             {
                 "label": "Top 10 brands by total sales",
                 "template": (
-                    "Return top 10 brands ordered by total sales (sum `Total Sales Amount`)."
+                    "Return the top 10 brands ordered by total sales calculated as the sum of Total Sales Amount "
+                    "from the table Haleon_Rewards_User_Performance_110925_SKUs."
                 ),
             },
         ]
+
 
     # Optional extra toggle in sidebar
     if show_on_sidebar_toggle:
@@ -240,17 +242,17 @@ def render_chat_widget_modern(
                 st.caption("Fill message and optionally set date(s), then click send.")
 
             if send_preset:
-                # Build message from preset + date(s)
+                # Build message from preset + date(s) as plain sentences (no quotes/backticks)
                 base_msg = (st.session_state.get(composer_key) or "").strip()
                 if date_mode == "range":
                     try:
                         start, end = st.session_state.get(date_key, (_today, _today))
                     except Exception:
                         start, end = _today, _today
-                    date_clause = f"\nDate range: {start} to {end}."
+                    date_clause = f" This request is for the period from {start} to {end}."
                 else:
                     the_date = st.session_state.get(date_key, _today)
-                    date_clause = f"\nDate: {the_date}."
+                    date_clause = f" This request is for the date {the_date}."
                 composed = (base_msg + date_clause).strip()
 
                 # Echo and send via the same pipeline as chat input

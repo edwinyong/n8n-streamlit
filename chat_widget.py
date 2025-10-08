@@ -1,5 +1,6 @@
 # chat_widget.py
 import time
+import datetime as _dt
 import requests
 import streamlit as st
 from typing import Any, Dict, List, Optional
@@ -89,12 +90,49 @@ def render_chat_widget_modern(
     show_on_sidebar_toggle: bool = False,
     clear_button: bool = True,
     max_history: int = 40,
+    # --- NEW: preset composer ---
+    enable_presets: bool = True,
+    date_mode: str = "range",  # "range" or "single"
+    presets: Optional[List[Dict[str, str]]] = None,
 ):
     """
     Modern, card-styled chat widget with a toggle to show/hide.
+    Adds a preset composer with a date picker on the right (single/range).
     Pure Streamlit (no custom components). Backward compatible with older Streamlit.
     """
     _init_state(default_open)
+
+    # ----- presets default -----
+    if presets is None:
+        presets = [
+            {
+                "label": "Weekly performance by brand",
+                "template": (
+                    "Generate weekly performance of buyers, purchases, total sales, and total units by Brand "
+                    "from `Haleon_Rewards_User_Performance_110925_SKUs`. "
+                    "Use Upload_Date for weekly bucket."
+                ),
+            },
+            {
+                "label": "Overall totals",
+                "template": (
+                    "Compute overall totals: purchases (distinct receiptid), total sales (sum `Total Sales Amount`), "
+                    "total units (sum Total_Purchase_Units), buyers (uniqExact comuserid)."
+                ),
+            },
+            {
+                "label": "Monthly sales and units by brand",
+                "template": (
+                    "Show monthly totals by Brand (month from Upload_Date): purchases, total sales, total units, buyers."
+                ),
+            },
+            {
+                "label": "Top 10 brands by total sales",
+                "template": (
+                    "Return top 10 brands ordered by total sales (sum `Total Sales Amount`)."
+                ),
+            },
+        ]
 
     # Optional extra toggle in sidebar
     if show_on_sidebar_toggle:
@@ -123,6 +161,21 @@ def render_chat_widget_modern(
     if not st.session_state[SESSION_OPEN_KEY]:
         return
 
+    # Keys for composer state
+    _today = _dt.date.today()
+    preset_key = "chat_preset_label"
+    composer_key = "chat_preset_text"
+    date_key = "chat_preset_date"
+
+    # Initialize composer defaults if missing
+    if composer_key not in st.session_state:
+        st.session_state[composer_key] = presets[0]["template"]
+    if date_key not in st.session_state:
+        if date_mode == "range":
+            st.session_state[date_key] = (_today, _today)
+        else:
+            st.session_state[date_key] = _today
+
     # Card container
     with st.container(border=True):
         # Header
@@ -141,7 +194,120 @@ def render_chat_widget_modern(
 
         st.divider()
 
-        # Messages (safe history access)
+        # ---------- PRESET COMPOSER (left) + DATE PICKER (right) ----------
+        if enable_presets:
+            c_left, c_right = st.columns([3, 2], gap="large")
+            with c_left:
+                st.caption("Preset")
+                def _apply_preset():
+                    label = st.session_state.get(preset_key)
+                    tmpl = next((p["template"] for p in presets if p["label"] == label), "")
+                    st.session_state[composer_key] = tmpl
+
+                st.selectbox(
+                    "Choose a preset",
+                    options=[p["label"] for p in presets],
+                    key=preset_key,
+                    index=0,
+                    on_change=_apply_preset,
+                )
+                st.text_area(
+                    "Message to send",
+                    key=composer_key,
+                    value=st.session_state[composer_key],
+                    height=130,
+                )
+            with c_right:
+                st.caption("Date filter")
+                if date_mode == "range":
+                    dr = st.date_input(
+                        "Date range",
+                        value=st.session_state[date_key],  # (start, end)
+                        key=date_key,
+                    )
+                else:
+                    dr = st.date_input(
+                        "Date",
+                        value=st.session_state[date_key],  # single date
+                        key=date_key,
+                    )
+
+            # submit preset query
+            submit_cols = st.columns([1, 6])
+            with submit_cols[0]:
+                send_preset = st.button("Apply & Ask", type="primary", use_container_width=True)
+            with submit_cols[1]:
+                st.caption("Fill message and optionally set date(s), then click send.")
+
+            if send_preset:
+                # Build message from preset + date(s)
+                base_msg = (st.session_state.get(composer_key) or "").strip()
+                if date_mode == "range":
+                    try:
+                        start, end = st.session_state.get(date_key, (_today, _today))
+                    except Exception:
+                        start, end = _today, _today
+                    date_clause = f"\nDate range: {start} to {end}."
+                else:
+                    the_date = st.session_state.get(date_key, _today)
+                    date_clause = f"\nDate: {the_date}."
+                composed = (base_msg + date_clause).strip()
+
+                # Echo and send via the same pipeline as chat input
+                st.session_state[SESSION_HISTORY_KEY].append({"role": "user", "content": composed})
+                _render_msg(st, "user", composed)
+
+                # Payload
+                payload: Dict[str, Any] = {
+                    "message": composed,
+                    "history": st.session_state[SESSION_HISTORY_KEY],
+                    "system": system_hint,
+                    "source": "streamlit",
+                }
+                if context is not None:
+                    payload["context"] = context
+
+                with (st.chat_message("assistant") if _HAS_CHAT_MESSAGE else st.container()):
+                    placeholder = st.empty()
+                    with st.spinner("Thinking…"):
+                        try:
+                            resp = _post_with_retry(webhook_url, payload, timeout=60)
+                            try:
+                                data = resp.json()
+                            except Exception:
+                                data = {"reply": resp.text}
+
+                            reply_txt = None
+                            for k in ("reply", "message", "text"):
+                                v = data.get(k)
+                                if isinstance(v, str) and v.strip():
+                                    reply_txt = v.strip()
+                                    break
+                            if not reply_txt:
+                                reply_txt = "(No reply)"
+
+                            placeholder.markdown(reply_txt)
+
+                            suggestions = data.get("suggestions")
+                            if isinstance(suggestions, list) and suggestions:
+                                st.caption("Try:")
+                                for s in suggestions[:5]:
+                                    if isinstance(s, str):
+                                        st.code(s)
+                        except Exception as e:
+                            reply_txt = f"Error: {e}"
+                            placeholder.error(reply_txt)
+
+                st.session_state[SESSION_HISTORY_KEY].append({"role": "assistant", "content": reply_txt})
+
+                # Cap history size
+                if len(st.session_state[SESSION_HISTORY_KEY]) > max_history:
+                    st.session_state[SESSION_HISTORY_KEY] = st.session_state[SESSION_HISTORY_KEY][-max_history:]
+
+                # After sending preset, add a divider before message history
+                st.divider()
+
+        # ---------- MESSAGES ----------
         history = st.session_state.get(SESSION_HISTORY_KEY, [])
         if not history:
             st.info("Say hello to start the conversation.")
@@ -153,13 +319,12 @@ def render_chat_widget_modern(
 
         st.divider()
 
-        # Input + Clear
-        cols = st.columns([6, 1, 1])
-        with cols[0]:
-            prompt = _get_input(st, "Type a message…", key="chat_prompt")
-        with cols[1]:
+        # ---------- FOLLOW-UP INPUT ----------
+        prompt = _get_input(st, "Type a message…", key="chat_prompt")
+        right_cols = st.columns([6, 1, 1])
+        with right_cols[1]:
             st.button("Send", use_container_width=True, disabled=True, help="Use the input to send")
-        with cols[2]:
+        with right_cols[2]:
             if clear_button and st.button("Clear", type="secondary", use_container_width=True):
                 st.session_state[SESSION_HISTORY_KEY] = []
                 st.rerun()
@@ -196,7 +361,6 @@ def render_chat_widget_modern(
                         data = {"reply": resp.text}
 
                     reply_txt = None
-                    # Safely pick a string reply
                     for k in ("reply", "message", "text"):
                         v = data.get(k)
                         if isinstance(v, str) and v.strip():
@@ -207,7 +371,6 @@ def render_chat_widget_modern(
 
                     placeholder.markdown(reply_txt)
 
-                    # Optional suggestions
                     suggestions = data.get("suggestions")
                     if isinstance(suggestions, list) and suggestions:
                         st.caption("Try:")

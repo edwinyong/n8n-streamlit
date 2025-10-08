@@ -5,7 +5,7 @@ import requests
 import streamlit as st
 from typing import Any, Dict, List, Optional
 
-DEFAULT_WEBHOOK = "https://d-target-sb.d-rive.click/webhook/ai-data-analysis-v2"
+DEFAULT_WEBHOOK = "https://d-target-sb.d-rive.click/webhook/ai-data-analysis-v3"
 SESSION_HISTORY_KEY = "chat_history"
 SESSION_OPEN_KEY = "chat_open"
 

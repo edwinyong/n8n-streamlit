@@ -1,146 +1,255 @@
-import streamlit as st
-import pandas as pd
+import json
+from typing import Any, Dict, List
+
 import altair as alt
-from datetime import datetime
-from typing import List, Dict, Any
-
-
-REPORT_DATA: Dict[str, Any] = {
-    "valid": True,
-    "issues": [],
-    "summary": [
-        "Registered users decreased from 4,998 in 2025 Q1 to 3,826 in 2025 Q2, a drop of 23.45%.",
-        "Total sales declined from 461,543.37 in Q1 to 371,077.93 in Q2, a decrease of 19.62%."
-    ],
-    "tables": [
-        {
-            "name": "Table",
-            "columns": ["period", "registered_users", "total_sales"],
-            "rows": [
-                ["2025 Q1", "4998", 461543.37000000733],
-                ["2025 Q2", "3826", 371077.93000000285]
-            ]
-        }
-    ],
-    "charts": [
-        {
-            "id": "users_sales_comparison",
-            "type": "groupedBar",
-            "spec": {
-                "xKey": "period",
-                "yKey": "value",
-                "series": [
-                    {"name": "Registered Users", "yKey": "registered_users"},
-                    {"name": "Total Sales", "yKey": "total_sales"}
-                ]
-            }
-        }
-    ],
-    "echo": {
-        "intent": "comparison_totals",
-        "used": {
-            "tables": [
-                "`Haleon_Rewards_User_Performance_110925_SKUs`",
-                "`Haleon_Rewards_User_Performance_110925_user_list`"
-            ],
-            "columns": ["Upload_Date", "Total Sales Amount", "comuserid", "user_id"]
-        },
-        "stats": {"elapsed": 0.026647236},
-        "sql_present": True
-    }
-}
-
-
-def _to_dataframe(table_obj: Dict[str, Any]) -> pd.DataFrame:
-    df = pd.DataFrame(table_obj.get("rows", []), columns=table_obj.get("columns", []))
-    # Best-effort dtype casting based on known column names
-    if "registered_users" in df.columns:
-        df["registered_users"] = pd.to_numeric(df["registered_users"], errors="coerce").astype("Int64")
-    if "total_sales" in df.columns:
-        df["total_sales"] = pd.to_numeric(df["total_sales"], errors="coerce")
-    return df
-
-
-def _grouped_bar_chart(df: pd.DataFrame, x_col: str, series: List[Dict[str, str]], chart_title: str = "") -> alt.Chart:
-    # Prepare long-form data for Altair grouped bars
-    value_cols = [s.get("yKey") for s in series]
-    label_map = {s.get("yKey"): s.get("name", s.get("yKey")) for s in series}
-
-    # Ensure numeric
-    for col in value_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    long_df = df.melt(id_vars=[x_col], value_vars=value_cols, var_name="metric_key", value_name="value")
-    long_df["metric"] = long_df["metric_key"].map(label_map)
-
-    # Preserve input order for x-axis
-    x_order = [x for x in df[x_col].astype(str).tolist()]
-
-    chart = (
-        alt.Chart(long_df)
-        .mark_bar()
-        .encode(
-            x=alt.X(f"{x_col}:N", sort=x_order, title=x_col),
-            xOffset=alt.XOffset("metric:N"),
-            y=alt.Y("value:Q", title="Value"),
-            color=alt.Color("metric:N", title="Metric"),
-            tooltip=[x_col + ":N", alt.Tooltip("metric:N", title="Metric"), alt.Tooltip("value:Q", title="Value", format=",")]
-        )
-        .properties(title=chart_title or "")
-    )
-    return chart
+import pandas as pd
+import streamlit as st
 
 
 def render_app() -> None:
-    st.set_page_config(page_title="Report Dashboard", layout="wide")
+    """Render the Streamlit application for the provided sales report JSON."""
+    # Embedded report JSON (as provided)
+    report_json = r'''{
+"valid": true,
+"issues": [],
+"summary": [
+  "Sensodyne led total sales in both 2025 Q1 (160,854.29) and Q2 (152,372.51), showing a slight decline of 5.27%.",
+  "Most brands saw lower sales in Q2 vs Q1; Panadol dropped sharply (99.82% decline), while Parodontax slightly increased (+5.10%).",
+  "Scotts, Polident, and Caltrate remain among the top-performing brands in both quarters, though all declined in Q2."
+],
+"tables": [
+  {
+    "name": "Table",
+    "columns": [
+      "period",
+      "Brand",
+      "total_sales"
+    ],
+    "rows": [
+      [
+        "2025 Q1",
+        "Caltrate",
+        56078.72000000009
+      ],
+      [
+        "2025 Q1",
+        "Centrum",
+        29271.57000000004
+      ],
+      [
+        "2025 Q1",
+        "Eno",
+        2801.000000000005
+      ],
+      [
+        "2025 Q1",
+        "Panadol",
+        29712.080000000027
+      ],
+      [
+        "2025 Q1",
+        "Panaflex",
+        7551.559999999975
+      ],
+      [
+        "2025 Q1",
+        "Parodontax",
+        4412.130000000001
+      ],
+      [
+        "2025 Q1",
+        "Polident",
+        81374.93000000063
+      ],
+      [
+        "2025 Q1",
+        "Scotts",
+        91210.31999999912
+      ],
+      [
+        "2025 Q1",
+        "Sensodyne",
+        160854.2899999991
+      ],
+      [
+        "2025 Q2",
+        "Caltrate",
+        39618.420000000006
+      ],
+      [
+        "2025 Q2",
+        "Centrum",
+        22508.870000000017
+      ],
+      [
+        "2025 Q2",
+        "Eno",
+        1158.0699999999995
+      ],
+      [
+        "2025 Q2",
+        "Panadol",
+        53.7
+      ],
+      [
+        "2025 Q2",
+        "Panaflex",
+        6580.399999999977
+      ],
+      [
+        "2025 Q2",
+        "Parodontax",
+        4637.609999999999
+      ],
+      [
+        "2025 Q2",
+        "Polident",
+        70893.68000000072
+      ],
+      [
+        "2025 Q2",
+        "Scotts",
+        73254.67000000027
+      ],
+      [
+        "2025 Q2",
+        "Sensodyne",
+        152372.5099999975
+      ]
+    ]
+  }
+],
+"charts": [
+  {
+    "id": "brand_performance_2025_q1_q2",
+    "type": "groupedBar",
+    "spec": {
+      "xKey": "Brand",
+      "yKey": "total_sales",
+      "series": [
+        {
+          "name": "2025 Q1",
+          "yKey": "2025 Q1"
+        },
+        {
+          "name": "2025 Q2",
+          "yKey": "2025 Q2"
+        }
+      ]
+    }
+  }
+],
+"echo": {
+  "intent": "comparison_totals",
+  "used": {
+    "tables": [
+      "`Haleon_Rewards_User_Performance_110925_SKUs`"
+    ],
+    "columns": [
+      "Upload_Date",
+      "Brand",
+      "Total Sales Amount"
+    ]
+  },
+  "stats": {
+    "elapsed": 0.011678378
+  },
+  "sql_present": true
+}
+}'''
 
-    report = REPORT_DATA
+    # Parse report
+    report: Dict[str, Any] = json.loads(report_json)
 
-    st.title("Quarterly Performance Overview")
+    st.title("Brand Sales Report: 2025 Q1 vs Q2")
 
     # Summaries
-    summaries = report.get("summary", [])
+    summaries: List[str] = report.get("summary", []) or []
     if summaries:
         st.subheader("Summary")
-        st.markdown("\n".join([f"- {s}" for s in summaries]))
+        for s in summaries:
+            st.markdown(f"- {s}")
 
     # Tables
-    tables = report.get("tables", [])
-    if tables:
-        st.subheader("Tables")
-        for idx, tbl in enumerate(tables, start=1):
-            df = _to_dataframe(tbl)
-            title = tbl.get("name") or f"Table {idx}"
-            st.markdown(f"**{title}**")
-            st.dataframe(df, use_container_width=True)
+    st.subheader("Tables")
+    table_dfs: Dict[str, pd.DataFrame] = {}
+    for tbl in report.get("tables", []):
+        name = tbl.get("name", "Table")
+        cols = tbl.get("columns", [])
+        rows = tbl.get("rows", [])
+        df = pd.DataFrame(rows, columns=cols)
+        table_dfs[name] = df
+        st.markdown(f"**{name}**")
+        st.dataframe(df, use_container_width=True)
 
     # Charts
+    def build_grouped_bar(df: pd.DataFrame, x_col: str, y_col: str, period_col: str, title: str = "") -> alt.Chart:
+        # Pivot to wide to ensure a stable set of period columns
+        pivot = (
+            df.pivot_table(index=x_col, columns=period_col, values=y_col, aggfunc="sum")
+            .reset_index()
+        )
+        # Melt back to long for grouped bars via xOffset
+        value_columns = [c for c in pivot.columns if c != x_col]
+        long_df = pivot.melt(id_vars=[x_col], value_vars=value_columns, var_name="Period", value_name="Sales")
+        # Ensure numeric type for Sales
+        long_df["Sales"] = pd.to_numeric(long_df["Sales"], errors="coerce")
+        # Sort for better legend order (optional)
+        long_df = long_df.sort_values([x_col, "Period"])  # noqa: F841
+
+        chart = (
+            alt.Chart(long_df)
+            .mark_bar()
+            .encode(
+                x=alt.X(f"{x_col}:N", title=x_col),
+                y=alt.Y("Sales:Q", title="Total Sales"),
+                color=alt.Color("Period:N", title="Period"),
+                xOffset="Period:N",
+                tooltip=[
+                    alt.Tooltip(f"{x_col}:N", title=x_col),
+                    alt.Tooltip("Period:N", title="Period"),
+                    alt.Tooltip("Sales:Q", title="Total Sales", format=",.2f"),
+                ],
+            )
+            .properties(title=title)
+        )
+        return chart
+
     charts = report.get("charts", [])
     if charts:
         st.subheader("Charts")
-        for ch in charts:
-            ch_type = (ch.get("type") or "").lower()
-            ch_id = ch.get("id") or "chart"
-            spec = ch.get("spec", {})
-            if ch_type == "groupedbar":
-                x_key = spec.get("xKey")
-                series = spec.get("series", [])
-                # Use the first table to source chart data (assumption based on provided JSON)
-                if tables:
-                    df = _to_dataframe(tables[0])
-                    chart = _grouped_bar_chart(df, x_key, series, chart_title=ch_id)
-                    st.altair_chart(chart, use_container_width=True)
+        # Use the first table by default as the data source for charts
+        source_df: pd.DataFrame = None
+        if table_dfs:
+            # Pick the first available table
+            first_table_name = next(iter(table_dfs))
+            source_df = table_dfs[first_table_name]
+        else:
+            source_df = pd.DataFrame()
+
+        for chart_obj in charts:
+            chart_type = chart_obj.get("type")
+            spec = chart_obj.get("spec", {})
+            if chart_type == "groupedBar":
+                x_key = spec.get("xKey", "Brand")
+                y_key = spec.get("yKey", "total_sales")
+                title = chart_obj.get("id", "Grouped Bar Chart")
+                if source_df is not None and not source_df.empty:
+                    grouped = build_grouped_bar(
+                        df=source_df,
+                        x_col=x_key,
+                        y_col=y_key,
+                        period_col="period",
+                        title=title,
+                    )
+                    st.altair_chart(grouped, use_container_width=True)
                 else:
-                    st.info(f"No table data available for chart '{ch_id}'.")
+                    st.info("No data available to render the grouped bar chart.")
             else:
-                st.info(f"Unsupported chart type: {ch_type} (id: {ch_id})")
+                st.info(f"Unsupported chart type: {chart_type}")
 
-    # Optional: Context info from echo
-    echo = report.get("echo")
-    if echo:
-        with st.expander("Details"):
-            st.write(echo)
+    # Footer / meta (optional)
+    # st.caption("Report generated from provided JSON input.")
 
 
-# This module exposes render_app() and does not execute on import.
+# Note: render_app() is intentionally not executed on import.

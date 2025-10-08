@@ -1,85 +1,47 @@
-from datetime import datetime
+from typing import Dict, List, Tuple, Callable
 import streamlit as st
 import pandas as pd
 import altair as alt
+from datetime import datetime
 
-# -------------------------------
-# Embedded report (as Python dict)
-# -------------------------------
-REPORT = {
+# ------------------------------------------------------------
+# Embedded report data (provided JSON converted to Python dict)
+# ------------------------------------------------------------
+REPORT_DATA = {
     "valid": True,
     "issues": [],
     "summary": [
-        "Weekly KPIs by brand include purchases (distinct receipts), buyers (unique users), total sales, and total units.",
-        "Sensodyne and Scotts are consistently top-performing brands in weekly sales, units, and buyer engagement.",
-        "Some brands (e.g., Parodontax, Panadol, Calsource) have intermittent or low activity.",
-        "Redemption data is not available in this dataset; only purchase, buyer, sales, and unit metrics are provided."
+        "2025 YTD total sales: 1,045,309.23; average per month: 116,145.47.",
+        "Peak month: 2025-02 (181,249.13); lowest: 2025-09 (18,826.01).",
+        "MoM highlights: Feb vs Jan +51.51%; Jul vs Jun -26.89%; Aug vs Jul -10.19%; Sep vs Aug -79.29%.",
+        "Trend weak after June: three consecutive monthly declines culminating in September’s sharp drop."
     ],
     "tables": [
         {
-            "name": "Weekly Brand KPIs",
-            "columns": ["week_start", "Brand", "purchases", "buyers", "total_sales", "total_units"],
+            "name": "Monthly Sales 2025",
+            "columns": ["month", "registered_users", "total_sales"],
             "rows": [
-                ["2023-12-31", "Caltrate", "238", "224", 23176.70000000002, "259"],
-                ["2023-12-31", "Centrum", "84", "75", 6240.799999999993, "100"],
-                ["2023-12-31", "Eno", "4", "4", 50.980000000000004, "5"],
-                ["2023-12-31", "Panaflex", "4", "3", 48.4, "9"],
-                ["2023-12-31", "Polident", "107", "100", 4962.539999999996, "196"],
-                ["2023-12-31", "Scotts", "202", "189", 12736.260000000022, "390"],
-                ["2023-12-31", "Sensodyne", "504", "470", 32640.6399999999, "2156"],
-                ["2024-01-07", "Caltrate", "99", "92", 9210.350000000008, "104"],
-                ["2024-01-07", "Centrum", "45", "45", 3550.1000000000004, "62"],
-                ["2024-01-07", "Eno", "7", "7", 263.41, "14"],
-                ["2024-01-07", "Panaflex", "3", "3", 21.78, "4"],
-                ["2024-01-07", "Parodontax", "10", "10", 260.3, "15"],
-                ["2024-01-07", "Polident", "64", "58", 3105.7200000000007, "128"],
-                ["2024-01-07", "Scotts", "101", "96", 5931.519999999991, "196"],
-                ["2024-01-07", "Sensodyne", "203", "185", 12473.040000000003, "725"],
-                ["2024-01-14", "Calsource", "1", "1", 40, "1"],
-                ["2024-01-14", "Caltrate", "54", "48", 4345.41, "55"],
-                ["2024-01-14", "Centrum", "35", "27", 2626.4000000000005, "35"],
-                ["2024-01-14", "Eno", "10", "10", 137.4, "15"],
-                ["2024-01-14", "Panaflex", "2", "2", 23.2, "4"],
-                ["2024-01-14", "Parodontax", "15", "13", 438.89999999999986, "28"],
-                ["2024-01-14", "Polident", "63", "62", 2594.540000000001, "136"],
-                ["2024-01-14", "Scotts", "39", "36", 2451.65, "81"],
-                ["2024-01-14", "Sensodyne", "79", "72", 3466.3200000000015, "194"],
-                ["2024-01-21", "Caltrate", "80", "66", 6916.88, "86"],
-                ["2024-01-21", "Centrum", "30", "25", 2708.4000000000005, "33"],
-                ["2024-01-21", "Eno", "4", "4", 59.8, "20"],
-                ["2024-01-21", "Panaflex", "3", "3", 64.9, "10"],
-                ["2024-01-21", "Parodontax", "4", "4", 67.19999999999999, "4"],
-                ["2024-01-21", "Polident", "62", "56", 2816.16, "136"],
-                ["2024-01-21", "Scotts", "34", "32", 1998.2200000000007, "61"],
-                ["2024-01-21", "Sensodyne", "66", "63", 3554.3700000000013, "194"],
-                ["2024-01-28", "Caltrate", "60", "56", 4892.759999999999, "64"],
-                ["2024-01-28", "Centrum", "27", "21", 2285.87, "27"],
-                ["2024-01-28", "Eno", "4", "4", 37.25, "5"],
-                ["2024-01-28", "Panaflex", "2", "2", 37.3, "5"],
-                ["2024-01-28", "Parodontax", "1", "1", 12.9, "1"],
-                ["2024-01-28", "Polident", "47", "43", 2253.7, "115"],
-                ["2024-01-28", "Scotts", "27", "23", 1357.92, "44"],
-                ["2024-01-28", "Sensodyne", "47", "45", 2457.800000000001, "126"]
+                ["2025-01-01", "1416", 119626.18999999885],
+                ["2025-02-01", "2093", 181249.12999999718],
+                ["2025-03-01", "1946", 162391.27999999782],
+                ["2025-04-01", "1621", 122584.14999999863],
+                ["2025-05-01", "1096", 110036.75999999886],
+                ["2025-06-01", "1491", 138457.01999999848],
+                ["2025-07-01", "1036", 101228.30999999943],
+                ["2025-08-01", "762", 90910.37999999947],
+                ["2025-09-01", "194", 18826.00999999998]
             ]
         }
     ],
     "charts": [
         {
-            "id": "weekly_brand_kpis",
-            "type": "stackedBar",
+            "id": "monthly_sales_2025",
+            "type": "line",
             "spec": {
-                "xKey": "week_start",
+                "xKey": "month",
                 "yKey": "total_sales",
                 "series": [
-                    {"name": "Caltrate", "yKey": "Caltrate"},
-                    {"name": "Centrum", "yKey": "Centrum"},
-                    {"name": "Eno", "yKey": "Eno"},
-                    {"name": "Panaflex", "yKey": "Panaflex"},
-                    {"name": "Parodontax", "yKey": "Parodontax"},
-                    {"name": "Polident", "yKey": "Polident"},
-                    {"name": "Scotts", "yKey": "Scotts"},
-                    {"name": "Sensodyne", "yKey": "Sensodyne"},
-                    {"name": "Calsource", "yKey": "Calsource"}
+                    {"name": "Total Sales", "yKey": "total_sales"}
                 ]
             }
         }
@@ -88,272 +50,273 @@ REPORT = {
         "intent": "trend",
         "used": {
             "tables": ["`Haleon_Rewards_User_Performance_110925_SKUs`"],
-            "columns": ["Upload_Date", "Brand", "receiptid", "comuserid", "Total Sales Amount", "Total_Purchase_Units"]
+            "columns": ["Upload_Date", "comuserid", "Total Sales Amount"]
         },
-        "stats": {"elapsed": 0.030837454},
+        "stats": {"elapsed": 0.01166004},
         "sql_present": True
     }
 }
 
-
-# -------------------------------
+# ------------------------------------------------------------
 # Utilities
-# -------------------------------
+# ------------------------------------------------------------
 
-def sanitize_columns(df: pd.DataFrame):
-    """Return a copy of df with safe lower_snake_case columns and a mapping original->safe."""
-    def to_safe(name: str) -> str:
-        s = str(name).strip().lower()
-        # Replace spaces and dashes with underscore
-        s = s.replace("-", "_").replace(" ", "_").replace("/", "_")
-        # Keep only alphanumeric and underscore
-        s = "".join(ch for ch in s if (ch.isalnum() or ch == "_"))
-        # Collapse multiple underscores
-        while "__" in s:
-            s = s.replace("__", "_")
-        if s == "":
-            s = "col"
-        return s
+def _sanitize_name(name: str) -> str:
+    s = str(name).strip().lower()
+    # replace spaces and hyphens with underscore
+    s = s.replace("-", "_").replace(" ", "_")
+    # keep only [A-Za-z0-9_]
+    out = []
+    for ch in s:
+        if ("a" <= ch <= "z") or ("0" <= ch <= "9") or ch == "_":
+            out.append(ch)
+    s = "".join(out)
+    while "__" in s:
+        s = s.replace("__", "_")
+    s = s.strip("_")
+    if s == "":
+        s = "col"
+    return s
 
-    mapping = {}
-    used = set()
-    for c in df.columns:
-        safe = to_safe(c)
-        # Ensure uniqueness
-        base = safe
-        i = 1
-        while safe in used:
-            i += 1
-            safe = f"{base}_{i}"
-        used.add(safe)
-        mapping[c] = safe
+def sanitize_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, str]]:
+    """Return a copy with safe snake_case columns and mapping original->safe.
+    Ensures uniqueness of safe names.
+    """
+    original_cols = list(df.columns)
+    safe_cols = []
+    mapping: Dict[str, str] = {}
+    used = {}
+    for col in original_cols:
+        base = _sanitize_name(col)
+        new = base
+        idx = 1
+        while new in used:
+            idx += 1
+            new = f"{base}_{idx}"
+        used[new] = True
+        mapping[col] = new
+        safe_cols.append(new)
     df_copy = df.copy()
-    df_copy.columns = [mapping[c] for c in df.columns]
+    df_copy.columns = safe_cols
     return df_copy, mapping
 
-
-def coerce_numeric(df: pd.DataFrame, cols):
-    df = df.copy()
+def coerce_numeric(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     for c in cols:
         if c in df.columns:
-            # If already numeric, keep; else strip non-numeric chars then convert
-            if not pd.api.types.is_numeric_dtype(df[c]):
-                df[c] = (
-                    df[c]
-                    .astype(str)
-                    .str.replace(r"[^0-9\.-]", "", regex=True)
-                    .replace({"": None})
-                )
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+            # Strip currency symbols, commas, spaces, and any non-numeric except . - e E
+            df[c] = pd.to_numeric(
+                df[c]
+                .astype(str)
+                .str.replace(r"[^0-9eE\.-]", "", regex=True)
+                .str.replace(r"\(([^)]*)\)", r"-\1", regex=True),
+                errors="coerce",
+            )
     return df
 
-
-def coerce_datetime(df: pd.DataFrame, cols):
-    df = df.copy()
+def coerce_datetime(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
     return df
 
-
-def safe_altair_chart(chart_builder_callable):
-    """Execute chart builder in try/except; on failure show warning and fallback table if provided by builder.
-    The builder may return either:
-      - chart
-      - (chart, fallback_df)
-    """
-    fallback_df = None
+def safe_altair_chart(builder: Callable[[], alt.Chart], fallback_df: pd.DataFrame) -> None:
     try:
-        result = chart_builder_callable()
-        if isinstance(result, tuple) and len(result) >= 1:
-            chart = result[0]
-            if len(result) > 1:
-                fallback_df = result[1]
-        else:
-            chart = result
+        chart = builder()
         if chart is None:
             st.warning("Chart unavailable")
-            if fallback_df is not None and isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
-                st.dataframe(fallback_df)
+            st.dataframe(fallback_df)
             return
         st.altair_chart(chart, use_container_width=True)
-    except Exception:
+    except Exception as e:
         st.warning("Chart unavailable")
-        try:
-            if fallback_df is not None and isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
-                st.dataframe(fallback_df)
-        except Exception:
-            pass
+        st.dataframe(fallback_df)
 
+# ------------------------------------------------------------
+# Core rendering logic
+# ------------------------------------------------------------
 
-# -------------------------------
-# Streamlit App
-# -------------------------------
+def _build_altair_chart(df_original: pd.DataFrame, chart_meta: Dict) -> Tuple[alt.Chart, pd.DataFrame]:
+    """Build an Altair chart from a DataFrame and chart metadata.
+    Returns (chart, sanitized_df_for_fallback). May raise; caller should guard.
+    """
+    # Sanitize columns
+    df_sanitized, mapping = sanitize_columns(df_original)
+
+    # Resolve keys
+    spec = chart_meta.get("spec", {})
+    x_key_orig = spec.get("xKey")
+    y_key_orig = spec.get("yKey")
+
+    chart_type = (chart_meta.get("type") or "").lower()
+
+    # Map to sanitized names if present
+    x_key = mapping.get(x_key_orig, _sanitize_name(x_key_orig) if x_key_orig else None)
+    y_key = mapping.get(y_key_orig, _sanitize_name(y_key_orig) if y_key_orig else None)
+
+    # Validate presence
+    needed = []
+    if chart_type == "pie":
+        # For pie we need one dimension (x) and one value (y)
+        needed = [x_key, y_key]
+    else:
+        needed = [x_key, y_key]
+
+    # If any key missing or not in df, fallback
+    if any((k is None or k not in df_sanitized.columns) for k in needed):
+        raise ValueError("Required fields not available for chart")
+
+    # Coerce types
+    # For x, try datetime; if not parseable, it will be NaT; otherwise keep as string
+    df_sanitized = coerce_datetime(df_sanitized, [x_key])
+    # For y, force numeric
+    df_sanitized = coerce_numeric(df_sanitized, [y_key])
+
+    # Prepare plot DataFrame: rows where both x and y are not null
+    df_plot = df_sanitized[[x_key, y_key]].copy()
+
+    # If x is all NaT, treat as nominal string from original column
+    if pd.api.types.is_datetime64_any_dtype(df_plot[x_key]):
+        pass
+    else:
+        # keep as-is (nominal)
+        pass
+
+    df_plot = df_plot.dropna(subset=[x_key, y_key])
+    if df_plot.shape[0] == 0:
+        raise ValueError("No valid data points for chart")
+
+    # Build chart
+    base = alt.Chart(df_plot)
+
+    if chart_type == "bar":
+        # Determine x type
+        if pd.api.types.is_datetime64_any_dtype(df_plot[x_key]):
+            x_enc = alt.X(f"{x_key}:T", title=x_key_orig or x_key)
+        else:
+            x_enc = alt.X(f"{x_key}:N", title=x_key_orig or x_key)
+        chart = base.mark_bar().encode(
+            x=x_enc,
+            y=alt.Y(f"{y_key}:Q", title=y_key_orig or y_key),
+            tooltip=[x_enc, alt.Tooltip(f"{y_key}:Q", title=y_key_orig or y_key)],
+        )
+        return chart, df_sanitized
+
+    if chart_type == "area":
+        if pd.api.types.is_datetime64_any_dtype(df_plot[x_key]):
+            x_enc = alt.X(f"{x_key}:T", title=x_key_orig or x_key)
+        else:
+            x_enc = alt.X(f"{x_key}:N", title=x_key_orig or x_key)
+        chart = base.mark_area(opacity=0.6).encode(
+            x=x_enc,
+            y=alt.Y(f"{y_key}:Q", title=y_key_orig or y_key),
+            tooltip=[x_enc, alt.Tooltip(f"{y_key}:Q", title=y_key_orig or y_key)],
+        )
+        return chart, df_sanitized
+
+    if chart_type == "pie":
+        # For pie, x is category, y is value
+        # Ensure y is numeric already; x nominal
+        chart = base.mark_arc().encode(
+            theta=alt.Theta(field=y_key, type="quantitative"),
+            color=alt.Color(field=x_key, type="nominal", title=x_key_orig or x_key),
+            tooltip=[alt.Tooltip(field=x_key, type="nominal", title=x_key_orig or x_key),
+                     alt.Tooltip(field=y_key, type="quantitative", title=y_key_orig or y_key)],
+        )
+        return chart, df_sanitized
+
+    # Default to line
+    if pd.api.types.is_datetime64_any_dtype(df_plot[x_key]):
+        x_enc = alt.X(f"{x_key}:T", title=x_key_orig or x_key)
+    else:
+        x_enc = alt.X(f"{x_key}:N", title=x_key_orig or x_key)
+    chart = base.mark_line(point=True).encode(
+        x=x_enc,
+        y=alt.Y(f"{y_key}:Q", title=y_key_orig or y_key),
+        tooltip=[x_enc, alt.Tooltip(f"{y_key}:Q", title=y_key_orig or y_key)],
+    )
+    return chart, df_sanitized
+
 
 def render_app():
-    # Configure page once per session
-    if "_page_configured" not in st.session_state:
+    # Guard page config to avoid reruns in multi-import contexts
+    if not st.session_state.get("_page_config_set", False):
         st.set_page_config(page_title="AI Report", layout="wide")
-        st.session_state["_page_configured"] = True
+        st.session_state["_page_config_set"] = True
 
-    # Altair settings to avoid row limit issues
+    # Altair settings
     alt.data_transformers.disable_max_rows()
 
     st.title("AI Report")
 
     # Summary section
-    if REPORT.get("summary"):
+    summary = REPORT_DATA.get("summary", [])
+    if summary:
         st.subheader("Summary")
-        for item in REPORT["summary"]:
+        for item in summary:
             st.markdown(f"- {item}")
 
-    # Process and display tables
-    st.subheader("Data Tables")
-    processed_tables = []  # list of dicts: {name, df_original, df_sanitized, mapping}
-
-    for tbl in REPORT.get("tables", []):
-        name = tbl.get("name", "Table")
-        cols = tbl.get("columns", [])
-        rows = tbl.get("rows", [])
+    # Tables: load into DataFrames and display
+    st.subheader("Tables")
+    table_dfs: Dict[str, pd.DataFrame] = {}
+    for t in REPORT_DATA.get("tables", []):
+        name = t.get("name") or "Table"
+        cols = t.get("columns", [])
+        rows = t.get("rows", [])
         try:
-            df_original = pd.DataFrame(rows, columns=cols)
+            df = pd.DataFrame(rows, columns=cols)
         except Exception:
-            df_original = pd.DataFrame()
-
+            # Fallback: try simple construction
+            df = pd.DataFrame(rows)
+            df.columns = cols[: len(df.columns)]
+        table_dfs[name] = df
         st.markdown(f"**{name}**")
-        st.dataframe(df_original)
-
-        df_sanitized, mapping = sanitize_columns(df_original)
-
-        # Attempt type coercions for common column types
-        # Determine likely numeric columns from known metric names if present
-        numeric_candidates = [c for c in ["purchases", "buyers", "total_sales", "total_units"] if c in df_sanitized.columns]
-        df_sanitized = coerce_numeric(df_sanitized, numeric_candidates)
-        # Datetime candidates
-        dt_candidates = []
-        # try to locate week_start's safe name via mapping
-        for k, v in mapping.items():
-            if str(k).lower() == "week_start":
-                dt_candidates.append(v)
-        df_sanitized = coerce_datetime(df_sanitized, dt_candidates)
-
-        processed_tables.append({
-            "name": name,
-            "df_original": df_original,
-            "df_sanitized": df_sanitized,
-            "mapping": mapping
-        })
+        st.dataframe(df)
 
     # Charts section
-    if REPORT.get("charts"):
+    charts = REPORT_DATA.get("charts", [])
+    if charts:
         st.subheader("Charts")
 
-    def find_table_with_fields(x_key: str, y_key: str, extra_fields=None):
-        extra_fields = extra_fields or []
-        for item in processed_tables:
-            mapping = item["mapping"]
-            df = item["df_sanitized"]
-            safe_x = mapping.get(x_key, x_key)
-            safe_y = mapping.get(y_key, y_key)
-            # For extra fields, we map from original if provided, otherwise assume already safe
-            safe_extras = []
-            for ef in extra_fields:
-                safe_extras.append(mapping.get(ef, ef))
-            needed = [safe_x, safe_y] + safe_extras
-            if all(col in df.columns for col in needed):
-                return item, safe_x, safe_y, safe_extras
-        return None, None, None, None
+    # Helper to find a table that contains required columns
+    def _find_table_with_columns(x_key: str, y_key: str) -> Tuple[str, pd.DataFrame]:
+        for name, df in table_dfs.items():
+            if x_key in df.columns and y_key in df.columns:
+                return name, df
+        # If not found exactly, try case-insensitive match
+        for name, df in table_dfs.items():
+            lower_map = {c.lower(): c for c in df.columns}
+            if x_key and y_key and (x_key.lower() in lower_map) and (y_key.lower() in lower_map):
+                df2 = df.rename(columns=lower_map)
+                return name, df2
+        # Fallback: return first table
+        if table_dfs:
+            first_name = list(table_dfs.keys())[0]
+            return first_name, table_dfs[first_name]
+        return "", pd.DataFrame()
 
-    for ch in REPORT.get("charts", []):
-        ch_id = ch.get("id", "chart")
-        ch_type = ch.get("type", "")
+    for ch in charts:
+        ch_id = ch.get("id") or "Chart"
+        ch_type = (ch.get("type") or "").capitalize()
+        st.markdown(f"**{ch_id} ({ch_type})**")
+
         spec = ch.get("spec", {})
-        st.markdown(f"**{ch_id}**")
+        x_key = spec.get("xKey")
+        y_key = spec.get("yKey")
 
-        if ch_type == "stackedBar":
-            x_key = spec.get("xKey")
-            y_key = spec.get("yKey")
-            # We expect a categorical stack by brand if present
-            # Try to find a table with Brand
-            item, safe_x, safe_y, _ = find_table_with_fields(x_key, y_key, extra_fields=["Brand"])  # original name
-            stack_col = None
-            if item is not None:
-                # Determine stack column safe name for Brand
-                mapping = item["mapping"]
-                stack_col = mapping.get("Brand", "brand")
-                if stack_col not in item["df_sanitized"].columns:
-                    stack_col = None
+        tbl_name, df_src = _find_table_with_columns(x_key, y_key) if (x_key and y_key) else ("", pd.DataFrame())
 
-            if item is None or safe_x is None or safe_y is None or stack_col is None:
-                # Fallback when required fields are missing
-                st.warning("Chart unavailable")
-                # If possible, show the first sanitized table
-                if processed_tables:
-                    st.dataframe(processed_tables[0]["df_sanitized"]) 
-                continue
-
-            df_safe = item["df_sanitized"].copy()
-
-            # Builder closure returns (chart, fallback_df)
-            def builder():
-                # Ensure required fields exist and have data
-                cols_needed = [safe_x, safe_y, stack_col]
-                if not all(c in df_safe.columns for c in cols_needed):
-                    raise ValueError("Required columns missing for chart")
-
-                dfx = df_safe[cols_needed].copy()
-                # Drop rows missing x or y
-                dfx = dfx.dropna(subset=[safe_x, safe_y])
-
-                if dfx.empty or dfx[safe_y].notna().sum() == 0:
-                    # Nothing to chart
-                    return None, df_safe
-
-                # Group to ensure a clean stack per x/stack_col
-                try:
-                    dfg = dfx.groupby([safe_x, stack_col], as_index=False)[safe_y].sum()
-                except Exception:
-                    dfg = dfx
-
-                # Determine x type
-                if pd.api.types.is_datetime64_any_dtype(dfg[safe_x]):
-                    x_enc = alt.X(f"{safe_x}:T", title=x_key)
-                else:
-                    x_enc = alt.X(f"{safe_x}:N", title=x_key)
-
-                y_enc = alt.Y(f"{safe_y}:Q", title=y_key)
-                color_enc = alt.Color(f"{stack_col}:N", title="brand")
-
-                tooltip_fields = []
-                for f in [safe_x, stack_col, safe_y]:
-                    if f in dfg.columns:
-                        tooltip_fields.append(f)
-
-                chart = (
-                    alt.Chart(dfg)
-                    .mark_bar()
-                    .encode(
-                        x=x_enc,
-                        y=y_enc,
-                        color=color_enc,
-                        tooltip=tooltip_fields,
-                    )
-                    .properties(height=380)
-                )
-                return chart, dfg
-
-            safe_altair_chart(builder)
-        else:
-            # Unsupported chart type: fallback
+        if df_src.empty:
             st.warning("Chart unavailable")
-            if processed_tables:
-                st.dataframe(processed_tables[0]["df_sanitized"])
+            continue
 
-    # Optional echo/metadata
-    echo = REPORT.get("echo")
-    if echo:
-        with st.expander("Details / Query Context"):
-            st.write(echo)
+        # Build and render chart safely
+        def _builder():
+            chart, _sanitized = _build_altair_chart(df_src, ch)
+            # Set common properties
+            return chart.properties(width="container", height=320)
 
+        # For fallback, provide sanitized table so users see what was used
+        sanitized_fallback, _ = sanitize_columns(df_src)
+        safe_altair_chart(_builder, sanitized_fallback)
 
-# Note: do not execute render_app() on import. It should be called by the runner.
+# Note: No top-level execution. The app runs only when render_app() is called.

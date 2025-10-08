@@ -1,308 +1,347 @@
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 import altair as alt
-from datetime import datetime
+
+# ---------------------------
+# Embedded report JSON (as Python dict)
+# ---------------------------
+REPORT = {
+    "valid": True,
+    "issues": [],
+    "summary": [
+        "2025 YTD sales (Jan–Sep): 1045309.23",
+        "Peak month: 2025-02-01 with 181249.12999999718 in sales; trough: 2025-09-01 with 18826.00999999998.",
+        "Latest MoM change (Sep vs Aug): -79.29%.",
+        "Data covers Jan–Sep 2025 based on available records."
+    ],
+    "tables": [
+        {
+            "name": "Monthly Sales 2025",
+            "columns": ["month", "total_sales"],
+            "rows": [
+                ["2025-01-01", 119626.18999999885],
+                ["2025-02-01", 181249.12999999718],
+                ["2025-03-01", 162391.27999999782],
+                ["2025-04-01", 122584.14999999863],
+                ["2025-05-01", 110036.75999999886],
+                ["2025-06-01", 138457.01999999848],
+                ["2025-07-01", 101228.30999999943],
+                ["2025-08-01", 90910.37999999947],
+                ["2025-09-01", 18826.00999999998]
+            ]
+        }
+    ],
+    "charts": [
+        {
+            "id": "monthly_sales_2025",
+            "type": "line",
+            "spec": {
+                "xKey": "month",
+                "yKey": "total_sales",
+                "series": [
+                    {"name": "Total Sales", "yKey": "total_sales"}
+                ]
+            }
+        }
+    ],
+    "echo": {
+        "intent": "trend",
+        "used": {"tables": ["`Haleon_Rewards_User_Performance_110925_SKUs`"], "columns": ["Upload_Date", "Total Sales Amount"]},
+        "stats": {"elapsed": 0.00532954},
+        "sql_present": True
+    }
+}
 
 # ---------------------------
 # Utilities
 # ---------------------------
 
 def sanitize_columns(df: pd.DataFrame):
-    """Return a copy with safe snake_case columns and a mapping from original->safe.
-    Only [A-Za-z0-9_] retained; spaces and others become underscores; ensure uniqueness.
+    """Return a copy of df with safe snake_case columns and a mapping of original->safe.
+    Ensures columns contain only [A-Za-z0-9_] and don't start with a digit.
+    Handles duplicates by appending numeric suffixes.
     """
-    def to_safe(name):
+    def _to_safe(name: str) -> str:
         s = str(name).strip().lower()
-        # replace non-alphanumeric with underscore
-        s = pd.Series([s]).str.replace(r"[^A-Za-z0-9]+", "_", regex=True).iloc[0]
-        s = s.strip("_")
-        if s == "":
-            s = "col"
+        # replace whitespace with underscore
+        s = "_".join(s.split())
+        # remove invalid chars
+        s = "".join(ch if (ch.isalnum() or ch == "_") else "_" for ch in s)
+        # collapse multiple underscores
+        while "__" in s:
+            s = s.replace("__", "_")
+        s = s.strip("_") or "col"
+        # cannot start with digit
+        if s and s[0].isdigit():
+            s = f"col_{s}"
         return s
 
     safe_cols = []
-    used = set()
     mapping = {}
+    used = {}
+
     for col in df.columns:
-        base = to_safe(col)
+        base = _to_safe(col)
         candidate = base
-        i = 1
+        idx = 1
         while candidate in used:
-            i += 1
-            candidate = f"{base}_{i}"
-        used.add(candidate)
-        safe_cols.append(candidate)
+            idx += 1
+            candidate = f"{base}_{idx}"
+        used[candidate] = True
         mapping[col] = candidate
-    df_safe = df.copy()
-    df_safe.columns = safe_cols
-    return df_safe, mapping
+        safe_cols.append(candidate)
+
+    df_copy = df.copy()
+    df_copy.columns = safe_cols
+    return df_copy, mapping
 
 
 def coerce_numeric(df: pd.DataFrame, cols):
-    """Coerce specified columns to numeric. Strip common non-numeric chars, handle parentheses for negatives."""
-    for c in cols:
-        if c in df.columns:
-            s = df[c].astype(str)
-            # Remove spaces and commas
-            s = s.str.replace(r"[\s,]", "", regex=True)
-            # Convert (123) to -123
-            s = s.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
-            # Remove currency and other symbols except signs, digits, decimal, exponent
-            s = s.str.replace(r"[^0-9eE\+\-\.]+", "", regex=True)
-            df[c] = pd.to_numeric(s, errors="coerce")
+    """Coerce specified columns to numeric, stripping non-numeric characters.
+    cols can be a list or a single column name. Operates in place.
+    """
+    if isinstance(cols, str):
+        cols = [cols]
+    for col in cols:
+        if col in df.columns:
+            # Convert to string and strip non-numeric symbols (keep digits, +, -, .)
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(r"[^0-9+\-.]", "", regex=True)
+            )
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
 def coerce_datetime(df: pd.DataFrame, cols):
-    """Coerce specified columns to datetime."""
-    for c in cols:
-        if c in df.columns:
-            df[c] = pd.to_datetime(df[c], errors="coerce")
+    """Coerce specified columns to datetime. Operates in place."""
+    if isinstance(cols, str):
+        cols = [cols]
+    for col in cols:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
     return df
 
 
-def safe_altair_chart(chart_builder_callable, fallback_df: pd.DataFrame = None):
-    """Safely build and render an Altair chart. On failure, warn and show sanitized table."""
+def safe_altair_chart(chart_builder_callable, fallback_df: pd.DataFrame, note: str = None):
+    """Safely build and render an Altair chart.
+    On any failure or builder returning None, show a warning and the sanitized table instead.
+    """
     try:
         chart = chart_builder_callable()
         if chart is None:
-            raise ValueError("Chart builder returned None")
-        st.altair_chart(chart, use_container_width=True)
+            st.warning("Chart unavailable")
+            st.dataframe(fallback_df)
+            return
+        try:
+            st.altair_chart(chart, use_container_width=True)
+        except Exception:
+            st.warning("Chart unavailable")
+            st.dataframe(fallback_df)
     except Exception:
         st.warning("Chart unavailable")
-        if fallback_df is not None and isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
-            st.dataframe(fallback_df)
+        st.dataframe(fallback_df)
 
 
 # ---------------------------
-# Render App
+# App Renderer
 # ---------------------------
 
 def render_app():
-    # Guard page config to avoid re-setting on reruns/imports
-    if not st.session_state.get("_page_config_set", False):
+    # Guard set_page_config to avoid re-running in multi-import contexts
+    if not st.session_state.get("_page_configured", False):
         st.set_page_config(page_title="AI Report", layout="wide")
-        st.session_state["_page_config_set"] = True
+        st.session_state["_page_configured"] = True
 
-    alt.data_transformers.disable_max_rows()
-
-    # The provided JSON report
-    report = {
-        "valid": True,
-        "issues": [],
-        "summary": ["Ping OK: 67978 receipts counted."],
-        "tables": [
-            {"name": "Ping", "columns": ["ping"], "rows": [["67978"]]}
-        ],
-        "charts": [
-            {
-                "id": "ping_kpi",
-                "type": "kpi",
-                "spec": {"xKey": "ping", "yKey": "ping", "series": [{"name": "ping", "yKey": "ping"}]}
-            }
-        ],
-        "echo": {
-            "intent": "single_number",
-            "used": {"tables": ["`Haleon_Rewards_User_Performance_110925_SKUs`"], "columns": ["receiptid"]},
-            "stats": {"elapsed": 0.00169683},
-            "sql_present": True
-        }
-    }
+    # Disable Altair max rows limit
+    try:
+        alt.data_transformers.disable_max_rows()
+    except Exception:
+        pass
 
     st.title("AI Report")
 
-    # Summary section
-    if isinstance(report.get("summary"), list) and report["summary"]:
+    # Summary Section
+    summaries = REPORT.get("summary", []) or []
+    if summaries:
         st.subheader("Summary")
-        for item in report["summary"]:
-            st.markdown(f"- {item}")
+        for s in summaries:
+            st.markdown(f"- {s}")
 
-    # Load tables into DataFrames
-    dataframes = []
-    for tbl in report.get("tables", []):
-        name = tbl.get("name") or "Table"
-        columns = tbl.get("columns") or []
-        rows = tbl.get("rows") or []
+    # Build tables
+    raw_tables = REPORT.get("tables", []) or []
+    processed_tables = []  # list of dicts: name, df_orig, df_safe, mapping
+
+    for t in raw_tables:
+        name = t.get("name") or "Table"
+        cols = t.get("columns", [])
+        rows = t.get("rows", [])
         try:
-            df = pd.DataFrame(rows, columns=columns)
+            df_orig = pd.DataFrame(rows, columns=cols)
         except Exception:
-            # Fallback: try without columns if mismatch
-            df = pd.DataFrame(rows)
-        dataframes.append({"name": name, "df": df})
+            df_orig = pd.DataFrame(columns=cols)
+        df_safe, mapping = sanitize_columns(df_orig)
+        processed_tables.append({
+            "name": name,
+            "df_orig": df_orig,
+            "df_safe": df_safe,
+            "mapping": mapping,
+        })
 
-    # Show tables (original columns)
-    if dataframes:
-        st.subheader("Tables")
-        for obj in dataframes:
-            st.markdown(f"**{obj['name']}**")
-            st.dataframe(obj["df"])  # original column names
+    # Display tables with original column names
+    for item in processed_tables:
+        st.subheader(f"Table: {item['name']}")
+        st.dataframe(item["df_orig"])  # show original columns
 
-    # Helper: choose table for a chart based on presence of keys
-    def choose_table_for_chart(x_key, y_key):
-        # prefer table containing both keys, then either key, else first
-        best = None
-        for obj in dataframes:
-            cols = list(obj["df"].columns)
-            if x_key in cols and y_key in cols:
-                return obj
-            if best is None and (x_key in cols or y_key in cols):
-                best = obj
-        return best if best is not None else (dataframes[0] if dataframes else None)
-
-    # Charts section
-    charts = report.get("charts", [])
+    # Charts Section
+    charts = REPORT.get("charts", []) or []
     if charts:
-        st.subheader("Visualizations")
+        st.subheader("Charts")
 
-    # Build and render each chart
+    def find_table_with_columns(x_key: str, y_key: str):
+        for item in processed_tables:
+            df_orig = item["df_orig"]
+            if x_key in df_orig.columns and y_key in df_orig.columns:
+                return item
+        return None
+
     for ch in charts:
         ch_id = ch.get("id") or "chart"
-        ch_type = (ch.get("type") or "").lower()
-        spec = ch.get("spec", {})
+        ch_type = (ch.get("type") or "").strip().lower()
+        spec = ch.get("spec", {}) or {}
         x_key = spec.get("xKey")
         y_key = spec.get("yKey")
+        color_key = spec.get("colorKey")  # optional
 
-        st.markdown(f"**{ch_id}**")
+        st.markdown(f"**Chart: {ch_id} ({ch_type})**")
 
-        table_obj = choose_table_for_chart(x_key, y_key) if dataframes else None
-        if table_obj is None:
+        # Validate keys
+        if not x_key or not y_key:
             st.warning("Chart unavailable")
+            # Attempt to show a related table (sanitized) if any
+            if processed_tables:
+                st.dataframe(processed_tables[0]["df_safe"])
             continue
 
-        df_original = table_obj["df"].copy()
-        df_sanitized, mapping = sanitize_columns(df_original)
-
-        # Resolver from original to safe, or direct if already safe
-        def to_safe(col_name):
-            if col_name in df_sanitized.columns:
-                return col_name
-            if col_name in mapping:
-                return mapping[col_name]
-            # try case-insensitive match
-            for orig, safe in mapping.items():
-                if str(orig).lower() == str(col_name).lower():
-                    return safe
-            return None
-
-        # KPI rendering
-        if ch_type == "kpi":
-            # Pick a numeric column: prefer y_key, else x_key, else first column
-            safe_val_col = None
-            if y_key:
-                safe_val_col = to_safe(y_key)
-            if safe_val_col is None and x_key:
-                safe_val_col = to_safe(x_key)
-            if safe_val_col is None and len(df_sanitized.columns) > 0:
-                safe_val_col = df_sanitized.columns[0]
-
-            if safe_val_col is None:
-                st.warning("Chart unavailable")
-                st.dataframe(df_sanitized)
-                continue
-
-            # Coerce numeric and compute a single value
-            df_num = df_sanitized.copy()
-            coerce_numeric(df_num, [safe_val_col])
-            series = df_num[safe_val_col].dropna()
-            if series.empty:
-                st.warning("Chart unavailable")
-                st.dataframe(df_sanitized)
-                continue
-
-            # Use the first non-null value
-            value = series.iloc[0]
-            label = ch_id if y_key is None else str(y_key)
-            try:
-                # Format value nicely
-                if pd.api.types.is_integer_dtype(series):
-                    val_str = f"{int(value):,}"
-                else:
-                    # Show up to 2 decimals if needed
-                    val_str = f"{float(value):,.2f}" if abs(value - int(value)) > 1e-9 else f"{int(value):,}"
-            except Exception:
-                val_str = str(value)
-
-            st.metric(label=label, value=val_str)
+        table_item = find_table_with_columns(x_key, y_key)
+        if table_item is None:
+            st.warning("Chart unavailable")
+            if processed_tables:
+                st.dataframe(processed_tables[0]["df_safe"])
             continue
 
-        # Pie-like charts
-        if ch_type in ("pie", "donut"):
-            dim_col = to_safe(x_key) or (df_sanitized.columns[0] if df_sanitized.columns.size > 0 else None)
-            val_col = to_safe(y_key) or None
-            if dim_col is None or val_col is None:
-                st.warning("Chart unavailable")
-                st.dataframe(df_sanitized)
-                continue
+        df_safe = table_item["df_safe"].copy()
+        mapping = table_item["mapping"]
 
-            df_chart = df_sanitized[[dim_col, val_col]].copy()
-            coerce_numeric(df_chart, [val_col])
-            df_chart = df_chart.dropna(subset=[dim_col, val_col])
-            if df_chart.empty:
-                st.warning("Chart unavailable")
-                st.dataframe(df_sanitized)
-                continue
+        safe_x = mapping.get(x_key)
+        safe_y = mapping.get(y_key)
+        safe_color = mapping.get(color_key) if color_key else None
 
-            def build_pie():
-                return alt.Chart(df_chart).mark_arc().encode(
-                    theta=alt.Theta(val_col, type="quantitative"),
-                    color=alt.Color(dim_col, type="nominal"),
-                    tooltip=[dim_col, val_col]
-                )
-
-            safe_altair_chart(build_pie, fallback_df=df_chart)
+        # If mapping failed (shouldn't if columns exist), fallback
+        if safe_x not in df_safe.columns or safe_y not in df_safe.columns:
+            st.warning("Chart unavailable")
+            st.dataframe(df_safe)
             continue
 
-        # Bar/Line/Area charts
-        if ch_type in ("bar", "line", "area"):
-            x_col = to_safe(x_key) or (df_sanitized.columns[0] if df_sanitized.columns.size > 0 else None)
-            y_col = to_safe(y_key)
+        # Coercions
+        # Determine if x looks like date; attempt datetime coercion regardless, will decide based on non-null count
+        coerce_datetime(df_safe, [safe_x])
+        coerce_numeric(df_safe, [safe_y])
 
-            if x_col is None or y_col is None or x_col not in df_sanitized.columns or y_col not in df_sanitized.columns:
-                st.warning("Chart unavailable")
-                st.dataframe(df_sanitized)
-                continue
+        # Also ensure color (if any) is string/nominal; no coercion needed
 
-            df_chart = df_sanitized[[x_col, y_col]].copy()
+        # Validate non-null rows for x and y
+        df_plot = df_safe[[safe_x, safe_y] + ([safe_color] if safe_color else [])].copy()
+        df_plot_valid = df_plot.dropna(subset=[safe_x, safe_y])
 
-            # Attempt datetime coercion for x; numeric for y
-            df_chart = coerce_datetime(df_chart, [x_col])
-            df_chart = coerce_numeric(df_chart, [y_col])
+        def build_line_chart():
+            # Ensure there is data
+            if df_plot_valid.empty:
+                return None
+            # Decide x type: temporal if not all NaT after datetime coercion
+            x_is_temporal = pd.api.types.is_datetime64_any_dtype(df_plot_valid[safe_x])
 
-            # Determine x type: temporal if any datetime exists, else nominal
-            x_is_datetime = pd.api.types.is_datetime64_any_dtype(df_chart[x_col]) and df_chart[x_col].notna().any()
+            enc_x = alt.X(safe_x, type='temporal' if x_is_temporal else 'nominal', title=x_key)
+            enc_y = alt.Y(safe_y, type='quantitative', title=y_key)
 
-            # Drop rows with NaN in required fields
-            df_chart = df_chart.dropna(subset=[x_col, y_col])
-            if df_chart.empty:
-                st.warning("Chart unavailable")
-                st.dataframe(df_sanitized)
-                continue
+            tooltip_fields = [safe_x, safe_y]
+            tooltip_fields = [f for f in tooltip_fields if f in df_plot_valid.columns]
 
-            def build_mark():
-                if ch_type == "bar":
-                    mark = alt.Chart(df_chart).mark_bar()
-                elif ch_type == "line":
-                    mark = alt.Chart(df_chart).mark_line()
-                else:
-                    mark = alt.Chart(df_chart).mark_area()
+            chart = alt.Chart(df_plot_valid).mark_line(point=True).encode(
+                x=enc_x,
+                y=enc_y,
+                color=alt.Color(safe_color, type='nominal', title=color_key) if safe_color and safe_color in df_plot_valid.columns else alt.value(None),
+                tooltip=tooltip_fields,
+            ).properties(height=300)
+            return chart
 
-                x_enc = alt.X(x_col, type="temporal" if x_is_datetime else "nominal")
-                y_enc = alt.Y(y_col, type="quantitative")
+        def build_bar_chart():
+            if df_plot_valid.empty:
+                return None
+            x_is_temporal = pd.api.types.is_datetime64_any_dtype(df_plot_valid[safe_x])
+            enc_x = alt.X(safe_x, type='temporal' if x_is_temporal else 'nominal', title=x_key)
+            enc_y = alt.Y(safe_y, type='quantitative', title=y_key)
+            tooltip_fields = [safe_x, safe_y]
+            tooltip_fields = [f for f in tooltip_fields if f in df_plot_valid.columns]
+            chart = alt.Chart(df_plot_valid).mark_bar().encode(
+                x=enc_x,
+                y=enc_y,
+                color=alt.Color(safe_color, type='nominal', title=color_key) if safe_color and safe_color in df_plot_valid.columns else alt.value(None),
+                tooltip=tooltip_fields,
+            ).properties(height=300)
+            return chart
 
-                return mark.encode(
-                    x=x_enc,
-                    y=y_enc,
-                    tooltip=[x_col, y_col]
-                )
+        def build_area_chart():
+            if df_plot_valid.empty:
+                return None
+            x_is_temporal = pd.api.types.is_datetime64_any_dtype(df_plot_valid[safe_x])
+            enc_x = alt.X(safe_x, type='temporal' if x_is_temporal else 'nominal', title=x_key)
+            enc_y = alt.Y(safe_y, type='quantitative', title=y_key)
+            tooltip_fields = [safe_x, safe_y]
+            tooltip_fields = [f for f in tooltip_fields if f in df_plot_valid.columns]
+            chart = alt.Chart(df_plot_valid).mark_area().encode(
+                x=enc_x,
+                y=enc_y,
+                color=alt.Color(safe_color, type='nominal', title=color_key) if safe_color and safe_color in df_plot_valid.columns else alt.value(None),
+                tooltip=tooltip_fields,
+            ).properties(height=300)
+            return chart
 
-            safe_altair_chart(build_mark, fallback_df=df_chart)
+        def build_pie_chart():
+            # For pie charts: need a dimension and a value; treat x_key as category and y_key as value
+            # Ensure non-null y
+            df_pie = df_safe[[safe_x, safe_y]].copy()
+            coerce_numeric(df_pie, [safe_y])
+            df_pie = df_pie.dropna(subset=[safe_y])
+            if df_pie.empty:
+                return None
+            chart = alt.Chart(df_pie).mark_arc().encode(
+                theta=alt.Theta(field=safe_y, type='quantitative'),
+                color=alt.Color(field=safe_x, type='nominal'),
+                tooltip=[safe_x, safe_y],
+            ).properties(height=300)
+            return chart
+
+        # Select appropriate builder
+        if ch_type == "line":
+            builder = build_line_chart
+        elif ch_type == "bar":
+            builder = build_bar_chart
+        elif ch_type == "area":
+            builder = build_area_chart
+        elif ch_type in ("pie", "donut", "arc"):
+            builder = build_pie_chart
+        else:
+            # Unknown chart type -> fallback
+            st.warning("Chart unavailable")
+            st.dataframe(df_safe)
             continue
 
-        # Unknown chart types -> warn and show table
-        st.warning("Chart unavailable")
-        st.dataframe(df_sanitized)
+        # Safely render chart
+        safe_altair_chart(builder, df_safe)
 
 
-# Note: No top-level execution. Intended usage:
-# from streamlit_app import render_app
-# render_app()
+# Note: Do not execute render_app() on import.
+# The app will be run by importing render_app and calling it externally.

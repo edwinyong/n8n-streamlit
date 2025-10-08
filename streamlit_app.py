@@ -3,94 +3,119 @@ import pandas as pd
 import altair as alt
 from datetime import datetime
 
-# Page config
-st.set_page_config(page_title="AI Report - Sales 2025", layout="wide")
 
-# --- Report summary (from JSON input) ---
-summary_lines = [
-    "Sales in 2025 showed a strong start with a peak in February (181,249.13), followed by a steady decline to September (18,826.01).",
-    "Highest sales months: February and March; lowest: September."
-]
+def render_app() -> None:
+    """Render the Streamlit application for user registrations and sales trends."""
+    st.set_page_config(page_title="User & Sales Trends", layout="wide")
 
-st.title("AI Report: Monthly Sales — 2025")
-st.markdown("\n".join([f"- {s}" for s in summary_lines]))
+    st.title("User Registrations and Sales Trends")
 
-# --- Data (tables from JSON input) ---
-# Table: Monthly Sales 2025
-monthly_sales_rows = [
-    ["2025-01-01", 119626.18999999885],
-    ["2025-02-01", 181249.12999999718],
-    ["2025-03-01", 162391.27999999782],
-    ["2025-04-01", 122584.14999999863],
-    ["2025-05-01", 110036.75999999886],
-    ["2025-06-01", 138457.01999999848],
-    ["2025-07-01", 101228.30999999943],
-    ["2025-08-01", 90910.37999999947],
-    ["2025-09-01", 18826.00999999998]
-]
+    # Embedded report data (derived from the provided JSON)
+    report = {
+        "summary": [
+            "Registered users peaked in February 2025 (2,093) and declined to 194 by September.",
+            "Total sales were highest in February 2025 (181,249.13) and lowest in September (18,826.01).",
+            "Both user registrations and sales show a downward trend after February.",
+        ],
+        "tables": [
+            {
+                "name": "Table",
+                "columns": ["month", "registered_users", "total_sales"],
+                "rows": [
+                    ["2025-01-01", "1416", 119626.18999999885],
+                    ["2025-02-01", "2093", 181249.12999999718],
+                    ["2025-03-01", "1946", 162391.27999999782],
+                    ["2025-04-01", "1621", 122584.14999999863],
+                    ["2025-05-01", "1096", 110036.75999999886],
+                    ["2025-06-01", "1491", 138457.01999999848],
+                    ["2025-07-01", "1036", 101228.30999999943],
+                    ["2025-08-01", "762", 90910.37999999947],
+                    ["2025-09-01", "194", 18826.00999999998],
+                ],
+            }
+        ],
+        "charts": [
+            {
+                "id": "main",
+                "type": "line",
+                "spec": {
+                    "xKey": "month",
+                    "yKey": "registered_users",
+                    "series": [
+                        {"name": "Registered Users", "yKey": "registered_users"},
+                        {"name": "Total Sales", "yKey": "total_sales"},
+                    ],
+                },
+            }
+        ],
+    }
 
-monthly_sales_columns = ["month", "total_sales"]
+    # Summaries
+    st.subheader("Summary")
+    for item in report.get("summary", []):
+        st.markdown(f"- {item}")
 
-df_monthly = pd.DataFrame(monthly_sales_rows, columns=monthly_sales_columns)
-# Parse month to datetime
-df_monthly["month"] = pd.to_datetime(df_monthly["month"])  # dtype: datetime64[ns]
+    # Tables
+    st.subheader("Data Table")
+    table = report["tables"][0]
+    df = pd.DataFrame(table["rows"], columns=table["columns"]).copy()
 
-# Sort by month just in case
-df_monthly = df_monthly.sort_values("month").reset_index(drop=True)
+    # Type conversions
+    df["month"] = pd.to_datetime(df["month"], errors="coerce")
+    df["registered_users"] = pd.to_numeric(df["registered_users"], errors="coerce")
+    df["total_sales"] = pd.to_numeric(df["total_sales"], errors="coerce")
 
-# Display table
-st.subheader("Monthly Sales 2025")
-st.dataframe(df_monthly.style.format({"total_sales": "${:,.2f}"}), height=300)
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "month": st.column_config.DateColumn("month", format="YYYY-MM"),
+            "registered_users": st.column_config.NumberColumn(
+                "registered_users", format=",.0f"
+            ),
+            "total_sales": st.column_config.NumberColumn(
+                "total_sales", format="$,.2f"
+            ),
+        },
+    )
 
-# Quick stats (highest/lowest months)
-max_row = df_monthly.loc[df_monthly["total_sales"].idxmax()]
-min_row = df_monthly.loc[df_monthly["total_sales"].idxmin()]
+    # Charts
+    st.subheader("Charts")
+    st.caption("Line chart showing monthly Registered Users and Total Sales (dual y-axes)")
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Peak month", max_row["month"].strftime("%B %Y"), f"${max_row['total_sales']:,.2f}")
-col2.metric("Lowest month", min_row["month"].strftime("%B %Y"), f"${min_row['total_sales']:,.2f}")
-col3.metric("Total (Jan-Sep)", "", f"${df_monthly['total_sales'].sum():,.2f}")
+    base = alt.Chart(df).encode(x=alt.X("month:T", title="Month"))
 
-# --- Charts (Altair) ---
-st.subheader("Sales Trend — Line Chart")
+    line_users = base.mark_line(point=True, color="#1f77b4").encode(
+        y=alt.Y(
+            "registered_users:Q",
+            axis=alt.Axis(title="Registered Users", format=",.0f"),
+        ),
+        tooltip=[
+            alt.Tooltip("month:T", title="Month"),
+            alt.Tooltip("registered_users:Q", title="Registered Users", format=",.0f"),
+        ],
+    )
 
-# Prepare data for Altair
-# Altair handles pandas datetime types for temporal X encoding
-chart = alt.Chart(df_monthly).mark_line(point=True, interpolate='monotone').encode(
-    x=alt.X('month:T', title='Month'),
-    y=alt.Y('total_sales:Q', title='Total Sales', axis=alt.Axis(format='$,') ),
-    tooltip=[
-        alt.Tooltip('month:T', title='Month', format='%Y-%m'),
-        alt.Tooltip('total_sales:Q', title='Total Sales', format='$,.2f')
-    ]
-).properties(
-    width=900,
-    height=400
-).interactive()
+    line_sales = base.mark_line(point=True, color="#d62728").encode(
+        y=alt.Y(
+            "total_sales:Q",
+            axis=alt.Axis(title="Total Sales ($)", orient="right", format="$,.0f"),
+        ),
+        tooltip=[
+            alt.Tooltip("month:T", title="Month"),
+            alt.Tooltip("total_sales:Q", title="Total Sales", format="$,.2f"),
+        ],
+    )
 
-# Add an area under the line for emphasis
-area = alt.Chart(df_monthly).mark_area(opacity=0.1, interpolate='monotone').encode(
-    x='month:T',
-    y='total_sales:Q'
-)
+    chart = (
+        alt.layer(line_users, line_sales)
+        .resolve_scale(y="independent")
+        .properties(title="Monthly Registered Users and Total Sales", height=420)
+    )
 
-combined = area + chart
-st.altair_chart(combined, use_container_width=True)
+    st.altair_chart(chart, use_container_width=True)
 
-# Optionally show the underlying data as CSV download
-csv = df_monthly.to_csv(index=False)
-st.download_button("Download monthly sales CSV", data=csv, file_name="monthly_sales_2025.csv", mime="text/csv")
-
-# Echo / metadata from the JSON input (for reference)
-with st.expander("Source & echo information"):
-    st.write("Intent: trend")
-    st.write({
-        "used_tables": ["Haleon_Rewards_User_Performance_110925_SKUs"],
-        "used_columns": ["Upload_Date", "Total Sales Amount"],
-        "sql_present": True,
-        "elapsed_seconds": 0.010482119
-    })
-
-# Footer
-st.markdown("---")
-st.markdown("Generated by AI report-to-Streamlit converter.")
+    # Display the original chart spec for reference (optional but helpful)
+    with st.expander("Chart specification (from report)"):
+        st.json(report["charts"][0])

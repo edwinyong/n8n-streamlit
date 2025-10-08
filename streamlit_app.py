@@ -1,104 +1,359 @@
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 import altair as alt
-import json
-from datetime import datetime
 
+# -------------------------------
+# Embedded report (as Python dict)
+# -------------------------------
+REPORT = {
+    "valid": True,
+    "issues": [],
+    "summary": [
+        "Weekly KPIs by brand include purchases (distinct receipts), buyers (unique users), total sales, and total units.",
+        "Sensodyne and Scotts are consistently top-performing brands in weekly sales, units, and buyer engagement.",
+        "Some brands (e.g., Parodontax, Panadol, Calsource) have intermittent or low activity.",
+        "Redemption data is not available in this dataset; only purchase, buyer, sales, and unit metrics are provided."
+    ],
+    "tables": [
+        {
+            "name": "Weekly Brand KPIs",
+            "columns": ["week_start", "Brand", "purchases", "buyers", "total_sales", "total_units"],
+            "rows": [
+                ["2023-12-31", "Caltrate", "238", "224", 23176.70000000002, "259"],
+                ["2023-12-31", "Centrum", "84", "75", 6240.799999999993, "100"],
+                ["2023-12-31", "Eno", "4", "4", 50.980000000000004, "5"],
+                ["2023-12-31", "Panaflex", "4", "3", 48.4, "9"],
+                ["2023-12-31", "Polident", "107", "100", 4962.539999999996, "196"],
+                ["2023-12-31", "Scotts", "202", "189", 12736.260000000022, "390"],
+                ["2023-12-31", "Sensodyne", "504", "470", 32640.6399999999, "2156"],
+                ["2024-01-07", "Caltrate", "99", "92", 9210.350000000008, "104"],
+                ["2024-01-07", "Centrum", "45", "45", 3550.1000000000004, "62"],
+                ["2024-01-07", "Eno", "7", "7", 263.41, "14"],
+                ["2024-01-07", "Panaflex", "3", "3", 21.78, "4"],
+                ["2024-01-07", "Parodontax", "10", "10", 260.3, "15"],
+                ["2024-01-07", "Polident", "64", "58", 3105.7200000000007, "128"],
+                ["2024-01-07", "Scotts", "101", "96", 5931.519999999991, "196"],
+                ["2024-01-07", "Sensodyne", "203", "185", 12473.040000000003, "725"],
+                ["2024-01-14", "Calsource", "1", "1", 40, "1"],
+                ["2024-01-14", "Caltrate", "54", "48", 4345.41, "55"],
+                ["2024-01-14", "Centrum", "35", "27", 2626.4000000000005, "35"],
+                ["2024-01-14", "Eno", "10", "10", 137.4, "15"],
+                ["2024-01-14", "Panaflex", "2", "2", 23.2, "4"],
+                ["2024-01-14", "Parodontax", "15", "13", 438.89999999999986, "28"],
+                ["2024-01-14", "Polident", "63", "62", 2594.540000000001, "136"],
+                ["2024-01-14", "Scotts", "39", "36", 2451.65, "81"],
+                ["2024-01-14", "Sensodyne", "79", "72", 3466.3200000000015, "194"],
+                ["2024-01-21", "Caltrate", "80", "66", 6916.88, "86"],
+                ["2024-01-21", "Centrum", "30", "25", 2708.4000000000005, "33"],
+                ["2024-01-21", "Eno", "4", "4", 59.8, "20"],
+                ["2024-01-21", "Panaflex", "3", "3", 64.9, "10"],
+                ["2024-01-21", "Parodontax", "4", "4", 67.19999999999999, "4"],
+                ["2024-01-21", "Polident", "62", "56", 2816.16, "136"],
+                ["2024-01-21", "Scotts", "34", "32", 1998.2200000000007, "61"],
+                ["2024-01-21", "Sensodyne", "66", "63", 3554.3700000000013, "194"],
+                ["2024-01-28", "Caltrate", "60", "56", 4892.759999999999, "64"],
+                ["2024-01-28", "Centrum", "27", "21", 2285.87, "27"],
+                ["2024-01-28", "Eno", "4", "4", 37.25, "5"],
+                ["2024-01-28", "Panaflex", "2", "2", 37.3, "5"],
+                ["2024-01-28", "Parodontax", "1", "1", 12.9, "1"],
+                ["2024-01-28", "Polident", "47", "43", 2253.7, "115"],
+                ["2024-01-28", "Scotts", "27", "23", 1357.92, "44"],
+                ["2024-01-28", "Sensodyne", "47", "45", 2457.800000000001, "126"]
+            ]
+        }
+    ],
+    "charts": [
+        {
+            "id": "weekly_brand_kpis",
+            "type": "stackedBar",
+            "spec": {
+                "xKey": "week_start",
+                "yKey": "total_sales",
+                "series": [
+                    {"name": "Caltrate", "yKey": "Caltrate"},
+                    {"name": "Centrum", "yKey": "Centrum"},
+                    {"name": "Eno", "yKey": "Eno"},
+                    {"name": "Panaflex", "yKey": "Panaflex"},
+                    {"name": "Parodontax", "yKey": "Parodontax"},
+                    {"name": "Polident", "yKey": "Polident"},
+                    {"name": "Scotts", "yKey": "Scotts"},
+                    {"name": "Sensodyne", "yKey": "Sensodyne"},
+                    {"name": "Calsource", "yKey": "Calsource"}
+                ]
+            }
+        }
+    ],
+    "echo": {
+        "intent": "trend",
+        "used": {
+            "tables": ["`Haleon_Rewards_User_Performance_110925_SKUs`"],
+            "columns": ["Upload_Date", "Brand", "receiptid", "comuserid", "Total Sales Amount", "Total_Purchase_Units"]
+        },
+        "stats": {"elapsed": 0.030837454},
+        "sql_present": True
+    }
+}
+
+
+# -------------------------------
+# Utilities
+# -------------------------------
+
+def sanitize_columns(df: pd.DataFrame):
+    """Return a copy of df with safe lower_snake_case columns and a mapping original->safe."""
+    def to_safe(name: str) -> str:
+        s = str(name).strip().lower()
+        # Replace spaces and dashes with underscore
+        s = s.replace("-", "_").replace(" ", "_").replace("/", "_")
+        # Keep only alphanumeric and underscore
+        s = "".join(ch for ch in s if (ch.isalnum() or ch == "_"))
+        # Collapse multiple underscores
+        while "__" in s:
+            s = s.replace("__", "_")
+        if s == "":
+            s = "col"
+        return s
+
+    mapping = {}
+    used = set()
+    for c in df.columns:
+        safe = to_safe(c)
+        # Ensure uniqueness
+        base = safe
+        i = 1
+        while safe in used:
+            i += 1
+            safe = f"{base}_{i}"
+        used.add(safe)
+        mapping[c] = safe
+    df_copy = df.copy()
+    df_copy.columns = [mapping[c] for c in df.columns]
+    return df_copy, mapping
+
+
+def coerce_numeric(df: pd.DataFrame, cols):
+    df = df.copy()
+    for c in cols:
+        if c in df.columns:
+            # If already numeric, keep; else strip non-numeric chars then convert
+            if not pd.api.types.is_numeric_dtype(df[c]):
+                df[c] = (
+                    df[c]
+                    .astype(str)
+                    .str.replace(r"[^0-9\.-]", "", regex=True)
+                    .replace({"": None})
+                )
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+def coerce_datetime(df: pd.DataFrame, cols):
+    df = df.copy()
+    for c in cols:
+        if c in df.columns:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+    return df
+
+
+def safe_altair_chart(chart_builder_callable):
+    """Execute chart builder in try/except; on failure show warning and fallback table if provided by builder.
+    The builder may return either:
+      - chart
+      - (chart, fallback_df)
+    """
+    fallback_df = None
+    try:
+        result = chart_builder_callable()
+        if isinstance(result, tuple) and len(result) >= 1:
+            chart = result[0]
+            if len(result) > 1:
+                fallback_df = result[1]
+        else:
+            chart = result
+        if chart is None:
+            st.warning("Chart unavailable")
+            if fallback_df is not None and isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
+                st.dataframe(fallback_df)
+            return
+        st.altair_chart(chart, use_container_width=True)
+    except Exception:
+        st.warning("Chart unavailable")
+        try:
+            if fallback_df is not None and isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
+                st.dataframe(fallback_df)
+        except Exception:
+            pass
+
+
+# -------------------------------
+# Streamlit App
+# -------------------------------
 
 def render_app():
-    st.set_page_config(page_title="Weekly Brand Sales & Units Dashboard", layout="wide")
+    # Configure page once per session
+    if "_page_configured" not in st.session_state:
+        st.set_page_config(page_title="AI Report", layout="wide")
+        st.session_state["_page_configured"] = True
 
-    # Raw report JSON embedded for a self-contained app
-    report_json = r'''{"valid":true,"issues":[],"summary":["Sensodyne and Scotts consistently lead in weekly sales and units across the observed period.","Sales and unit volumes show significant week-to-week fluctuations, with notable peaks for Sensodyne (e.g., over 23,000 in sales and 1,200+ units in some weeks).","Brands like Parodontax, Panadol, and Calsource show sporadic or minimal weekly activity.","No consistent upward or downward trend is observed for most brands; performance varies by week and brand."],"tables":[{"name":"Weekly Brand Sales & Units","columns":["week_start","Brand","total_sales","total_units"],"rows":[["2023-12-31","Caltrate",23176.70000000002,"259"],["2023-12-31","Centrum",6240.799999999993,"100"],["2023-12-31","Eno",50.980000000000004,"5"],["2023-12-31","Panaflex",48.4,"9"],["2023-12-31","Polident",4962.539999999996,"196"],["2023-12-31","Scotts",12736.260000000022,"390"],["2023-12-31","Sensodyne",32640.6399999999,"2156"],["2024-01-07","Caltrate",9210.350000000008,"104"],["2024-01-07","Centrum",3550.1000000000004,"62"],["2024-01-07","Eno",263.41,"14"],["2024-01-07","Panaflex",21.78,"4"],["2024-01-07","Parodontax",260.3,"15"],["2024-01-07","Polident",3105.7200000000007,"128"],["2024-01-07","Scotts",5931.519999999991,"196"],["2024-01-07","Sensodyne",12473.040000000003,"725"],["2024-01-14","Calsource",40,"1"],["2024-01-14","Caltrate",4345.41,"55"],["2024-01-14","Centrum",2626.4000000000005,"35"],["2024-01-14","Eno",137.4,"15"],["2024-01-14","Panaflex",23.2,"4"],["2024-01-14","Parodontax",438.89999999999986,"28"],["2024-01-14","Polident",2594.540000000001,"136"],["2024-01-14","Scotts",2451.65,"81"],["2024-01-14","Sensodyne",3466.3200000000015,"194"],["2024-01-21","Caltrate",6916.88,"86"],["2024-01-21","Centrum",2708.4000000000005,"33"],["2024-01-21","Eno",59.8,"20"],["2024-01-21","Panaflex",64.9,"10"],["2024-01-21","Parodontax",67.19999999999999,"4"],["2024-01-21","Polident",2816.16,"136"],["2024-01-21","Scotts",1998.2200000000007,"61"],["2024-01-21","Sensodyne",3554.3700000000013,"194"],["2024-01-28","Caltrate",4892.759999999999,"64"],["2024-01-28","Centrum",2285.87,"27"],["2024-01-28","Eno",37.25,"5"],["2024-01-28","Panaflex",37.3,"5"],["2024-01-28","Parodontax",12.9,"1"],["2024-01-28","Polident",2253.7,"115"],["2024-01-28","Scotts",1357.92,"44"],["2024-01-28","Sensodyne",2457.800000000001,"126"]]}],"charts":[{"id":"weekly_sales_by_brand","type":"stackedBar","spec":{"xKey":"week_start","yKey":"total_sales","series":[{"name":"Caltrate","yKey":"Caltrate"},{"name":"Centrum","yKey":"Centrum"},{"name":"Eno","yKey":"Eno"},{"name":"Panaflex","yKey":"Panaflex"},{"name":"Parodontax","yKey":"Parodontax"},{"name":"Polident","yKey":"Polident"},{"name":"Scotts","yKey":"Scotts"},{"name":"Sensodyne","yKey":"Sensodyne"},{"name":"Calsource","yKey":"Calsource"}]}},{"id":"weekly_units_by_brand","type":"stackedBar","spec":{"xKey":"week_start","yKey":"total_units","series":[{"name":"Caltrate","yKey":"Caltrate"},{"name":"Centrum","yKey":"Centrum"},{"name":"Eno","yKey":"Eno"},{"name":"Panaflex","yKey":"Panaflex"},{"name":"Parodontax","yKey":"Parodontax"},{"name":"Polident","yKey":"Polident"},{"name":"Scotts","yKey":"Scotts"},{"name":"Sensodyne","yKey":"Sensodyne"},{"name":"Calsource","yKey":"Calsource"}]}}],"echo":{"intent":"trend","used":{"tables":["`Haleon_Rewards_User_Performance_110925_SKUs`"],"columns":["Upload_Date","Brand","Total Sales Amount","Total_Purchase_Units"]},"stats":{"elapsed":0.028928044},"sql_present":true}}'''
+    # Altair settings to avoid row limit issues
+    alt.data_transformers.disable_max_rows()
 
-    report = json.loads(report_json)
+    st.title("AI Report")
 
-    st.title("Weekly Brand Performance")
-
-    # Display summaries
-    summaries = report.get("summary", [])
-    if summaries:
+    # Summary section
+    if REPORT.get("summary"):
         st.subheader("Summary")
-        for item in summaries:
+        for item in REPORT["summary"]:
             st.markdown(f"- {item}")
 
-    # Helper to build stacked bar charts using Altair
-    def stacked_bar_chart(df: pd.DataFrame, y_col: str, title: str, brand_order=None) -> alt.Chart:
-        tooltip_title = "Sales" if y_col == "total_sales" else "Units"
-        y_title = "Sales Amount" if y_col == "total_sales" else "Units"
-        number_format = ",.2f" if y_col == "total_sales" else ",d"
-        chart = (
-            alt.Chart(df)
-            .mark_bar()
-            .encode(
-                x=alt.X("week_start:T", title="Week Start"),
-                y=alt.Y(f"sum({y_col}):Q", title=y_title),
-                color=alt.Color("Brand:N", sort=brand_order, legend=alt.Legend(title="Brand")),
-                order=alt.Order("Brand:N", sort=brand_order if brand_order else None),
-                tooltip=[
-                    alt.Tooltip("week_start:T", title="Week"),
-                    alt.Tooltip("Brand:N", title="Brand"),
-                    alt.Tooltip(f"sum({y_col}):Q", title=tooltip_title, format=number_format),
-                ],
-            )
-            .properties(title=title, height=400)
-            .interactive()
-        )
-        return chart
+    # Process and display tables
+    st.subheader("Data Tables")
+    processed_tables = []  # list of dicts: {name, df_original, df_sanitized, mapping}
 
-    # Display tables and collect main dataframe for charts
-    st.subheader("Tables")
-    df_main = None
-    tables = report.get("tables", [])
-    for idx, tbl in enumerate(tables, start=1):
-        name = tbl.get("name", f"Table {idx}")
-        st.markdown(f"#### {name}")
-        df = pd.DataFrame(tbl.get("rows", []), columns=tbl.get("columns", []))
+    for tbl in REPORT.get("tables", []):
+        name = tbl.get("name", "Table")
+        cols = tbl.get("columns", [])
+        rows = tbl.get("rows", [])
+        try:
+            df_original = pd.DataFrame(rows, columns=cols)
+        except Exception:
+            df_original = pd.DataFrame()
 
-        # Type conversions
-        if "week_start" in df.columns:
-            df["week_start"] = pd.to_datetime(df["week_start"], errors="coerce")
-        for col in ["total_sales", "total_units"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        st.markdown(f"**{name}**")
+        st.dataframe(df_original)
 
-        st.dataframe(df, use_container_width=True)
+        df_sanitized, mapping = sanitize_columns(df_original)
 
-        if name == "Weekly Brand Sales & Units":
-            df_main = df.copy()
+        # Attempt type coercions for common column types
+        # Determine likely numeric columns from known metric names if present
+        numeric_candidates = [c for c in ["purchases", "buyers", "total_sales", "total_units"] if c in df_sanitized.columns]
+        df_sanitized = coerce_numeric(df_sanitized, numeric_candidates)
+        # Datetime candidates
+        dt_candidates = []
+        # try to locate week_start's safe name via mapping
+        for k, v in mapping.items():
+            if str(k).lower() == "week_start":
+                dt_candidates.append(v)
+        df_sanitized = coerce_datetime(df_sanitized, dt_candidates)
 
-    # If specific named table not found, fall back to first table
-    if df_main is None and len(tables) > 0:
-        df_main = pd.DataFrame(tables[0].get("rows", []), columns=tables[0].get("columns", []))
-        if "week_start" in df_main.columns:
-            df_main["week_start"] = pd.to_datetime(df_main["week_start"], errors="coerce")
-        for col in ["total_sales", "total_units"]:
-            if col in df_main.columns:
-                df_main[col] = pd.to_numeric(df_main[col], errors="coerce")
+        processed_tables.append({
+            "name": name,
+            "df_original": df_original,
+            "df_sanitized": df_sanitized,
+            "mapping": mapping
+        })
 
-    # Charts
-    if df_main is not None and {"week_start", "Brand"}.issubset(set(df_main.columns)):
+    # Charts section
+    if REPORT.get("charts"):
         st.subheader("Charts")
-        # Determine brand order from chart spec if present
-        brand_order = None
-        sales_spec = next((c for c in report.get("charts", []) if c.get("id") == "weekly_sales_by_brand"), None)
-        if sales_spec and "spec" in sales_spec and "series" in sales_spec["spec"]:
-            brand_order = [s.get("name") for s in sales_spec["spec"]["series"] if s.get("name")]
 
-        # Ensure consistent ordering and sorting by week
-        if brand_order:
-            df_main["Brand"] = pd.Categorical(df_main["Brand"], categories=brand_order, ordered=True)
-        df_main = df_main.sort_values(["week_start", "Brand"])  # type: ignore[arg-type]
+    def find_table_with_fields(x_key: str, y_key: str, extra_fields=None):
+        extra_fields = extra_fields or []
+        for item in processed_tables:
+            mapping = item["mapping"]
+            df = item["df_sanitized"]
+            safe_x = mapping.get(x_key, x_key)
+            safe_y = mapping.get(y_key, y_key)
+            # For extra fields, we map from original if provided, otherwise assume already safe
+            safe_extras = []
+            for ef in extra_fields:
+                safe_extras.append(mapping.get(ef, ef))
+            needed = [safe_x, safe_y] + safe_extras
+            if all(col in df.columns for col in needed):
+                return item, safe_x, safe_y, safe_extras
+        return None, None, None, None
 
-        cols = st.columns(2)
-        with cols[0]:
-            if "total_sales" in df_main.columns:
-                sales_chart = stacked_bar_chart(df_main, "total_sales", "Weekly Sales by Brand", brand_order)
-                st.altair_chart(sales_chart, use_container_width=True)
-        with cols[1]:
-            if "total_units" in df_main.columns:
-                units_chart = stacked_bar_chart(df_main, "total_units", "Weekly Units by Brand", brand_order)
-                st.altair_chart(units_chart, use_container_width=True)
+    for ch in REPORT.get("charts", []):
+        ch_id = ch.get("id", "chart")
+        ch_type = ch.get("type", "")
+        spec = ch.get("spec", {})
+        st.markdown(f"**{ch_id}**")
 
-    else:
-        st.info("No compatible data found to render charts.")
+        if ch_type == "stackedBar":
+            x_key = spec.get("xKey")
+            y_key = spec.get("yKey")
+            # We expect a categorical stack by brand if present
+            # Try to find a table with Brand
+            item, safe_x, safe_y, _ = find_table_with_fields(x_key, y_key, extra_fields=["Brand"])  # original name
+            stack_col = None
+            if item is not None:
+                # Determine stack column safe name for Brand
+                mapping = item["mapping"]
+                stack_col = mapping.get("Brand", "brand")
+                if stack_col not in item["df_sanitized"].columns:
+                    stack_col = None
+
+            if item is None or safe_x is None or safe_y is None or stack_col is None:
+                # Fallback when required fields are missing
+                st.warning("Chart unavailable")
+                # If possible, show the first sanitized table
+                if processed_tables:
+                    st.dataframe(processed_tables[0]["df_sanitized"]) 
+                continue
+
+            df_safe = item["df_sanitized"].copy()
+
+            # Builder closure returns (chart, fallback_df)
+            def builder():
+                # Ensure required fields exist and have data
+                cols_needed = [safe_x, safe_y, stack_col]
+                if not all(c in df_safe.columns for c in cols_needed):
+                    raise ValueError("Required columns missing for chart")
+
+                dfx = df_safe[cols_needed].copy()
+                # Drop rows missing x or y
+                dfx = dfx.dropna(subset=[safe_x, safe_y])
+
+                if dfx.empty or dfx[safe_y].notna().sum() == 0:
+                    # Nothing to chart
+                    return None, df_safe
+
+                # Group to ensure a clean stack per x/stack_col
+                try:
+                    dfg = dfx.groupby([safe_x, stack_col], as_index=False)[safe_y].sum()
+                except Exception:
+                    dfg = dfx
+
+                # Determine x type
+                if pd.api.types.is_datetime64_any_dtype(dfg[safe_x]):
+                    x_enc = alt.X(f"{safe_x}:T", title=x_key)
+                else:
+                    x_enc = alt.X(f"{safe_x}:N", title=x_key)
+
+                y_enc = alt.Y(f"{safe_y}:Q", title=y_key)
+                color_enc = alt.Color(f"{stack_col}:N", title="brand")
+
+                tooltip_fields = []
+                for f in [safe_x, stack_col, safe_y]:
+                    if f in dfg.columns:
+                        tooltip_fields.append(f)
+
+                chart = (
+                    alt.Chart(dfg)
+                    .mark_bar()
+                    .encode(
+                        x=x_enc,
+                        y=y_enc,
+                        color=color_enc,
+                        tooltip=tooltip_fields,
+                    )
+                    .properties(height=380)
+                )
+                return chart, dfg
+
+            safe_altair_chart(builder)
+        else:
+            # Unsupported chart type: fallback
+            st.warning("Chart unavailable")
+            if processed_tables:
+                st.dataframe(processed_tables[0]["df_sanitized"])
+
+    # Optional echo/metadata
+    echo = REPORT.get("echo")
+    if echo:
+        with st.expander("Details / Query Context"):
+            st.write(echo)
+
+
+# Note: do not execute render_app() on import. It should be called by the runner.

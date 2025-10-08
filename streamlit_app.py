@@ -3,229 +3,212 @@ import pandas as pd
 import altair as alt
 from datetime import datetime
 
-
-def render_app():
-    """
-    Streamlit renderer for the provided JSON report.
-
-    Usage:
-        from streamlit_app import render_app
-        render_app()
-    """
-    # The provided JSON report embedded for a self-contained app
-    report = {
-        "valid": True,
-        "issues": [],
-        "summary": [
-            "Total sales show a fluctuating trend with no consistent improvement over the observed period.",
-            "Sales peaked in November 2024 (194,247.50) and reached a low in September 2025 (18,826.01).",
-            "Recent months (2025 Q2) saw a downward trend, with sales declining from 138,457.02 in June 2025 to 18,826.01 in September 2025."
-        ],
-        "tables": [
-            {
-                "name": "Table",
-                "columns": ["month", "registered_users", "total_sales"],
-                "rows": [
-                    ["2024-01-01", "1559", 155716.77999999866],
-                    ["2024-02-01", "755", 69937.42000000055],
-                    ["2024-03-01", "384", 33747.91000000003],
-                    ["2024-04-01", "1355", 115891.65999999913],
-                    ["2024-05-01", "740", 82326.92000000003],
-                    ["2024-06-01", "1036", 101096.36999999949],
-                    ["2024-07-01", "1180", 113795.1999999991],
-                    ["2024-08-01", "1320", 133218.4099999987],
-                    ["2024-09-01", "477", 53061.82000000047],
-                    ["2024-10-01", "1616", 126693.1599999974],
-                    ["2024-11-01", "2506", 194247.4999999981],
-                    ["2024-12-01", "1494", 127829.75999999963],
-                    ["2025-01-01", "1416", 119626.18999999885],
-                    ["2025-02-01", "2093", 181249.12999999718],
-                    ["2025-03-01", "1946", 162391.27999999782],
-                    ["2025-04-01", "1621", 122584.14999999863],
-                    ["2025-05-01", "1096", 110036.75999999886],
-                    ["2025-06-01", "1491", 138457.01999999848],
-                    ["2025-07-01", "1036", 101228.30999999943],
-                    ["2025-08-01", "762", 90910.37999999947],
-                    ["2025-09-01", "194", 18826.00999999998]
+# Embedded report data (as provided)
+REPORT = {
+    "valid": True,
+    "issues": [],
+    "summary": [
+        "Weekly KPIs per brand include purchases (distinct receipts), buyers (unique users), total sales, and total units.",
+        "Sensodyne and Scotts consistently lead in weekly sales and user engagement across most weeks.",
+        "Some brands (e.g., Parodontax, Panadol, Calsource) have sporadic activity, with weeks of zero or minimal performance.",
+        "Redemption data is not present in the provided dataset; only purchase, buyer, sales, and unit metrics are available."
+    ],
+    "tables": [
+        {
+            "name": "Table",
+            "columns": ["week_start", "Brand", "purchases", "buyers", "total_sales", "total_units"],
+            "rows": [
+                ["2023-12-31", "Caltrate", "238", "224", 23176.70000000002, "259"],
+                ["2023-12-31", "Centrum", "84", "75", 6240.799999999993, "100"],
+                ["2023-12-31", "Eno", "4", "4", 50.980000000000004, "5"],
+                ["2023-12-31", "Panaflex", "4", "3", 48.4, "9"],
+                ["2023-12-31", "Polident", "107", "100", 4962.539999999996, "196"],
+                ["2023-12-31", "Scotts", "202", "189", 12736.260000000022, "390"],
+                ["2023-12-31", "Sensodyne", "504", "470", 32640.6399999999, "2156"],
+                ["2024-01-07", "Caltrate", "99", "92", 9210.350000000008, "104"],
+                ["2024-01-07", "Centrum", "45", "45", 3550.1000000000004, "62"],
+                ["2024-01-07", "Eno", "7", "7", 263.41, "14"],
+                ["2024-01-07", "Panaflex", "3", "3", 21.78, "4"],
+                ["2024-01-07", "Parodontax", "10", "10", 260.3, "15"],
+                ["2024-01-07", "Polident", "64", "58", 3105.7200000000007, "128"],
+                ["2024-01-07", "Scotts", "101", "96", 5931.519999999991, "196"],
+                ["2024-01-07", "Sensodyne", "203", "185", 12473.040000000003, "725"],
+                ["2024-01-14", "Calsource", "1", "1", 40, "1"],
+                ["2024-01-14", "Caltrate", "54", "48", 4345.41, "55"],
+                ["2024-01-14", "Centrum", "35", "27", 2626.4000000000005, "35"],
+                ["2024-01-14", "Eno", "10", "10", 137.4, "15"],
+                ["2024-01-14", "Panaflex", "2", "2", 23.2, "4"],
+                ["2024-01-14", "Parodontax", "15", "13", 438.89999999999986, "28"],
+                ["2024-01-14", "Polident", "63", "62", 2594.540000000001, "136"],
+                ["2024-01-14", "Scotts", "39", "36", 2451.65, "81"],
+                ["2024-01-14", "Sensodyne", "79", "72", 3466.3200000000015, "194"],
+                ["2024-01-21", "Caltrate", "80", "66", 6916.88, "86"],
+                ["2024-01-21", "Centrum", "30", "25", 2708.4000000000005, "33"],
+                ["2024-01-21", "Eno", "4", "4", 59.8, "20"],
+                ["2024-01-21", "Panaflex", "3", "3", 64.9, "10"],
+                ["2024-01-21", "Parodontax", "4", "4", 67.19999999999999, "4"],
+                ["2024-01-21", "Polident", "62", "56", 2816.16, "136"],
+                ["2024-01-21", "Scotts", "34", "32", 1998.2200000000007, "61"],
+                ["2024-01-21", "Sensodyne", "66", "63", 3554.3700000000013, "194"],
+                ["2024-01-28", "Caltrate", "60", "56", 4892.759999999999, "64"],
+                ["2024-01-28", "Centrum", "27", "21", 2285.87, "27"],
+                ["2024-01-28", "Eno", "4", "4", 37.25, "5"],
+                ["2024-01-28", "Panaflex", "2", "2", 37.3, "5"],
+                ["2024-01-28", "Parodontax", "1", "1", 12.9, "1"],
+                ["2024-01-28", "Polident", "47", "43", 2253.7, "115"],
+                ["2024-01-28", "Scotts", "27", "23", 1357.92, "44"],
+                ["2024-01-28", "Sensodyne", "47", "45", 2457.800000000001, "126"]
+            ]
+        }
+    ],
+    "charts": [
+        {
+            "id": "weekly_brand_kpis",
+            "type": "stackedBar",
+            "spec": {
+                "xKey": "week_start",
+                "yKey": "total_sales",
+                "series": [
+                    {"name": "Caltrate", "yKey": "Caltrate"},
+                    {"name": "Centrum", "yKey": "Centrum"},
+                    {"name": "Eno", "yKey": "Eno"},
+                    {"name": "Panaflex", "yKey": "Panaflex"},
+                    {"name": "Parodontax", "yKey": "Parodontax"},
+                    {"name": "Polident", "yKey": "Polident"},
+                    {"name": "Scotts", "yKey": "Scotts"},
+                    {"name": "Sensodyne", "yKey": "Sensodyne"},
+                    {"name": "Calsource", "yKey": "Calsource"}
                 ]
             }
-        ],
-        "charts": [
-            {
-                "id": "sales_trend",
-                "type": "line",
-                "spec": {
-                    "xKey": "month",
-                    "yKey": "total_sales",
-                    "series": [
-                        {"name": "Total Sales", "yKey": "total_sales"}
-                    ]
-                }
-            }
-        ],
-        "echo": {
-            "intent": "trend",
-            "used": {"tables": ["`Haleon_Rewards_User_Performance_110925_SKUs`"], "columns": ["Upload_Date", "comuserid", "Total Sales Amount"]},
-            "stats": {"elapsed": 0.016164377},
-            "sql_present": True
         }
+    ],
+    "echo": {
+        "intent": "trend",
+        "used": {
+            "tables": ["`Haleon_Rewards_User_Performance_110925_SKUs`"],
+            "columns": ["Upload_Date", "Brand", "receiptid", "comuserid", "Total Sales Amount", "Total_Purchase_Units"]
+        },
+        "stats": {"elapsed": 0.030837454},
+        "sql_present": True
     }
+}
 
-    # Helper: convert a table dict to a typed pandas DataFrame
-    def _table_to_dataframe(table_dict: dict) -> pd.DataFrame:
-        df = pd.DataFrame(table_dict.get("rows", []), columns=table_dict.get("columns", []))
-        # Type conversions where possible
-        if "month" in df.columns:
-            df["month"] = pd.to_datetime(df["month"], errors="coerce")
-        if "registered_users" in df.columns:
-            df["registered_users"] = pd.to_numeric(df["registered_users"], errors="coerce")
-        if "total_sales" in df.columns:
-            df["total_sales"] = pd.to_numeric(df["total_sales"], errors="coerce")
-        return df
 
-    # Helper: infer Altair type from a pandas Series
-    def _alt_type(series: pd.Series) -> str:
-        if pd.api.types.is_datetime64_any_dtype(series):
-            return "T"  # temporal
-        if pd.api.types.is_numeric_dtype(series):
-            return "Q"  # quantitative
-        return "N"  # nominal
+def _prepare_dataframe(report_table: dict) -> pd.DataFrame:
+    """Create and clean a pandas DataFrame from the embedded report table."""
+    df = pd.DataFrame(report_table.get("rows", []), columns=report_table.get("columns", []))
 
-    # Title
-    st.title("Sales Performance Report")
+    # Coerce data types
+    if "week_start" in df.columns:
+        df["week_start"] = pd.to_datetime(df["week_start"], errors="coerce")
+    for col in ["purchases", "buyers", "total_sales", "total_units"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Summary
-    summaries = report.get("summary", [])
+    # Sort by week then brand
+    sort_cols = [c for c in ["week_start", "Brand"] if c in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols).reset_index(drop=True)
+    return df
+
+
+def _stacked_sales_chart(df: pd.DataFrame, series_order=None) -> alt.Chart:
+    """Build an Altair stacked bar chart of total sales by week and brand."""
+    series_order = series_order or []
+    color_scale = alt.Scale(domain=series_order) if series_order else alt.Undefined
+    color_sort = series_order if series_order else alt.Undefined
+
+    chart = (
+        alt.Chart(df)
+        .mark_bar()
+        .encode(
+            x=alt.X("week_start:T", title="Week Start", sort="ascending"),
+            y=alt.Y("sum(total_sales):Q", title="Total Sales"),
+            color=alt.Color("Brand:N", title="Brand", scale=color_scale, sort=color_sort),
+            tooltip=[
+                alt.Tooltip("yearmonthdate(week_start):T", title="Week"),
+                alt.Tooltip("Brand:N", title="Brand"),
+                alt.Tooltip("sum(total_sales):Q", title="Total Sales", format=",.2f"),
+                alt.Tooltip("sum(purchases):Q", title="Purchases", format=","),
+                alt.Tooltip("sum(buyers):Q", title="Buyers", format=","),
+                alt.Tooltip("sum(total_units):Q", title="Units", format=",")
+            ],
+            order=alt.Order("Brand", sort="ascending"),
+        )
+        .properties(height=420)
+    )
+    return chart
+
+
+def render_app():
+    """Render the Streamlit application for the provided report."""
+    st.set_page_config(page_title="Weekly Brand KPIs Dashboard", layout="wide")
+
+    st.title("Weekly Brand KPIs Dashboard")
+
+    # Summaries
+    summaries = REPORT.get("summary", [])
     if summaries:
         st.subheader("Summary")
         st.markdown("\n".join([f"- {s}" for s in summaries]))
 
-    # Tables
-    st.subheader("Tables")
-    tables = report.get("tables", [])
-    dataframes = {}
+    # Load table into DataFrame
+    tables = REPORT.get("tables", [])
+    if tables:
+        base_table = tables[0]
+        df = _prepare_dataframe(base_table)
 
-    for idx, tbl in enumerate(tables):
-        name = tbl.get("name") or f"Table {idx + 1}"
-        df = _table_to_dataframe(tbl)
-        dataframes[name] = df
-
-        # Optional period caption if month exists
-        if "month" in df.columns and not df["month"].isna().all():
-            df_sorted = df.sort_values("month")
-            start, end = df_sorted["month"].min(), df_sorted["month"].max()
-            if pd.notna(start) and pd.notna(end):
-                st.caption(f"Period: {start.strftime('%b %Y')} - {end.strftime('%b %Y')}")
-
-        # Display the table with formatting if columns exist
-        try:
-            st.dataframe(
-                df,
-                hide_index=True,
-                column_config={
-                    "registered_users": st.column_config.NumberColumn("Registered Users", format=",d"),
-                    "total_sales": st.column_config.NumberColumn("Total Sales", format=",.2f"),
-                },
-                use_container_width=True,
+        # Optional filters for exploration
+        with st.expander("Filters", expanded=False):
+            available_brands = sorted(df["Brand"].dropna().unique().tolist()) if "Brand" in df.columns else []
+            selected_brands = st.multiselect("Brands", options=available_brands, default=available_brands)
+            min_date = pd.to_datetime(df["week_start"].min()) if "week_start" in df.columns else None
+            max_date = pd.to_datetime(df["week_start"].max()) if "week_start" in df.columns else None
+            date_range = st.date_input(
+                "Week start range",
+                value=(min_date.date() if min_date is not None else None, max_date.date() if max_date is not None else None),
+                help="Limit the weeks shown in the table and charts"
             )
-        except Exception:
-            # Fallback if Streamlit version doesn't support column_config
-            st.dataframe(df, hide_index=True, use_container_width=True)
 
-    # Charts
-    charts = report.get("charts", [])
-    if charts:
-        st.subheader("Charts")
+        # Apply filters
+        filtered_df = df.copy()
+        if selected_brands:
+            filtered_df = filtered_df[filtered_df["Brand"].isin(selected_brands)]
+        if "week_start" in filtered_df.columns and isinstance(date_range, (list, tuple)) and len(date_range) == 2 and all(date_range):
+            start_dt = pd.to_datetime(date_range[0])
+            end_dt = pd.to_datetime(date_range[1])
+            filtered_df = filtered_df[(filtered_df["week_start"] >= start_dt) & (filtered_df["week_start"] <= end_dt)]
 
-    # Assume charts relate to the first available table unless otherwise specified
-    default_df = None
-    if dataframes:
-        # Prefer the first table for chart data
-        first_key = list(dataframes.keys())[0]
-        default_df = dataframes[first_key]
+        # KPI totals
+        kpi_cols = st.columns(4)
+        kpi_totals = {
+            "Total Purchases": int(filtered_df["purchases"].sum()) if "purchases" in filtered_df.columns else 0,
+            "Total Buyers": int(filtered_df["buyers"].sum()) if "buyers" in filtered_df.columns else 0,
+            "Total Sales": filtered_df["total_sales"].sum() if "total_sales" in filtered_df.columns else 0.0,
+            "Total Units": int(filtered_df["total_units"].sum()) if "total_units" in filtered_df.columns else 0,
+        }
+        kpi_cols[0].metric("Total Purchases", f"{kpi_totals['Total Purchases']:,}")
+        kpi_cols[1].metric("Total Buyers", f"{kpi_totals['Total Buyers']:,}")
+        kpi_cols[2].metric("Total Sales", f"${kpi_totals['Total Sales']:,.2f}")
+        kpi_cols[3].metric("Total Units", f"{kpi_totals['Total Units']:,}")
 
-    for chart_def in charts:
-        ctype = (chart_def.get("type") or "").lower()
-        spec = chart_def.get("spec", {})
-        x_key = spec.get("xKey")
-        y_key = spec.get("yKey")
+        # Data table display
+        st.subheader("Weekly KPIs per Brand (Table)")
+        st.dataframe(filtered_df, use_container_width=True)
 
-        # Pick dataframe to use
-        df_for_chart = default_df
-        if df_for_chart is None or x_key not in df_for_chart.columns or y_key not in df_for_chart.columns:
-            # If we cannot find proper data, skip chart with a warning
-            st.warning(f"Chart '{chart_def.get('id', 'chart')}' could not be rendered due to missing data columns.")
-            continue
+        # Chart(s)
+        st.subheader("Weekly Total Sales by Brand (Stacked Bar)")
+        chart_spec = next((c for c in REPORT.get("charts", []) if c.get("id") == "weekly_brand_kpis"), None)
+        series_order = [s.get("name") for s in chart_spec.get("spec", {}).get("series", [])] if chart_spec else []
 
-        # Ensure data is sorted by x if temporal
-        if x_key in df_for_chart.columns and pd.api.types.is_datetime64_any_dtype(df_for_chart[x_key]):
-            df_for_chart = df_for_chart.sort_values(x_key)
+        sales_chart = _stacked_sales_chart(filtered_df, series_order=series_order)
+        st.altair_chart(sales_chart, use_container_width=True)
 
-        x_type = _alt_type(df_for_chart[x_key])
-        y_type = _alt_type(df_for_chart[y_key])
+    # Metadata (optional)
+    with st.expander("Report Metadata", expanded=False):
+        st.write("Intent:", REPORT.get("echo", {}).get("intent"))
+        st.write("Data Source Tables:", REPORT.get("echo", {}).get("used", {}).get("tables", []))
+        st.write("Columns Used:", REPORT.get("echo", {}).get("used", {}).get("columns", []))
+        st.write("SQL Present:", REPORT.get("echo", {}).get("sql_present"))
 
-        # Build Altair chart based on type
-        if ctype == "line":
-            chart = (
-                alt.Chart(df_for_chart)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X(f"{x_key}:{x_type}", title=x_key.replace("_", " ").title()),
-                    y=alt.Y(
-                        f"{y_key}:{y_type}",
-                        title=y_key.replace("_", " ").title(),
-                        axis=alt.Axis(format=",.2f") if y_type == "Q" else alt.Undefined,
-                    ),
-                    tooltip=[
-                        alt.Tooltip(f"{x_key}:{x_type}", title=x_key.replace("_", " ").title()),
-                        alt.Tooltip(f"{y_key}:{y_type}", title=y_key.replace("_", " ").title(), format=",.2f" if y_type == "Q" else None),
-                    ],
-                )
-                .properties(height=380)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        elif ctype == "bar":
-            chart = (
-                alt.Chart(df_for_chart)
-                .mark_bar()
-                .encode(
-                    x=alt.X(f"{x_key}:{x_type}", title=x_key.replace("_", " ").title()),
-                    y=alt.Y(
-                        f"{y_key}:{y_type}",
-                        title=y_key.replace("_", " ").title(),
-                        axis=alt.Axis(format=",.2f") if y_type == "Q" else alt.Undefined,
-                    ),
-                    tooltip=[
-                        alt.Tooltip(f"{x_key}:{x_type}", title=x_key.replace("_", " ").title()),
-                        alt.Tooltip(f"{y_key}:{y_type}", title=y_key.replace("_", " ").title(), format=",.2f" if y_type == "Q" else None),
-                    ],
-                )
-                .properties(height=380)
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info(f"Chart type '{ctype}' not specifically handled; showing as line chart by default.")
-            chart = (
-                alt.Chart(df_for_chart)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X(f"{x_key}:{x_type}", title=x_key.replace("_", " ").title()),
-                    y=alt.Y(
-                        f"{y_key}:{y_type}",
-                        title=y_key.replace("_", " ").title(),
-                        axis=alt.Axis(format=",.2f") if y_type == "Q" else alt.Undefined,
-                    ),
-                    tooltip=[
-                        alt.Tooltip(f"{x_key}:{x_type}", title=x_key.replace("_", " ").title()),
-                        alt.Tooltip(f"{y_key}:{y_type}", title=y_key.replace("_", " ").title(), format=",.2f" if y_type == "Q" else None),
-                    ],
-                )
-                .properties(height=380)
-            )
-            st.altair_chart(chart, use_container_width=True)
-
-    # Optional: Raw metadata
-    echo = report.get("echo")
-    if echo:
-        with st.expander("View query metadata", expanded=False):
-            st.json(echo)
+# The render_app() function is intentionally not executed on import.

@@ -9,7 +9,7 @@ render_app()
 
 # Modern chat widget (toggle to show/hide)
 render_chat_widget_modern(
-    webhook_url="https://d-target-sb.d-rive.click/webhook/ai-data-analysis-v2",
+    webhook_url="https://d-target-sb.d-rive.click/webhook/ai-data-analysis-v3",
     title="✨ TDG Assistant",
     subtitle="Agent chat",
     status="Live",

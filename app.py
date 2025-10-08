@@ -1,11 +1,11 @@
 import streamlit as st
-from streamlit_app import render_main_app
+from streamlit_app import render_app
 from chat_widget import render_chat_widget_modern
 
 st.set_page_config(page_title="TDG Assistant", layout="wide")
 
 # Main content
-render_main_app()
+render_app()
 
 # Modern chat widget (toggle to show/hide)
 render_chat_widget_modern(

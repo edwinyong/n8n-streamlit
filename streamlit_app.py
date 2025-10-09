@@ -1,375 +1,274 @@
-import streamlit as st
+from datetime import datetime
 import pandas as pd
 import altair as alt
-from datetime import datetime
-import re
+import streamlit as st
 
 
-# -----------------------------
-# Utilities
-# -----------------------------
-
+# ---------------------- Utilities ----------------------
 def sanitize_columns(df: pd.DataFrame):
-    """
-    Return a copy of df with sanitized column names (lower_snake_case, [A-Za-z0-9_])
-    and a mapping from original -> safe.
+    """Return a copy of df with safe snake_case columns and a mapping original->safe.
+    Only [A-Za-z0-9_] allowed. Ensures uniqueness by appending numeric suffixes when needed.
     """
     def to_safe(name: str) -> str:
-        safe = name.strip().lower()
-        safe = re.sub(r"\s+", "_", safe)
-        safe = re.sub(r"[^a-z0-9_]", "_", safe)
-        safe = re.sub(r"_+", "_", safe)
-        safe = safe.strip("_")
-        if not safe:
-            safe = "col"
-        return safe
+        s = str(name).strip().lower()
+        # replace common separators with underscore
+        s = s.replace("-", "_").replace(" ", "_").replace("/", "_").replace("\\", "_")
+        # keep only alnum and underscore
+        safe_chars = []
+        for ch in s:
+            if ("a" <= ch <= "z") or ("0" <= ch <= "9") or ch == "_":
+                safe_chars.append(ch)
+        s = "".join(safe_chars)
+        # collapse multiple underscores
+        while "__" in s:
+            s = s.replace("__", "_")
+        s = s.strip("_")
+        if s == "":
+            s = "col"
+        return s
 
+    original_cols = list(df.columns)
+    used = {}
     mapping = {}
-    used = set()
-    for col in df.columns:
-        base = to_safe(str(col))
-        safe = base
+    safe_cols = []
+    for col in original_cols:
+        base = to_safe(col)
+        candidate = base
         i = 1
-        while safe in used:
-            safe = f"{base}_{i}"
+        while candidate in used:
             i += 1
-        mapping[col] = safe
-        used.add(safe)
+            candidate = f"{base}_{i}"
+        used[candidate] = True
+        mapping[col] = candidate
+        safe_cols.append(candidate)
     df_copy = df.copy()
-    df_copy.columns = [mapping[c] for c in df.columns]
+    df_copy.columns = safe_cols
     return df_copy, mapping
 
 
 def coerce_numeric(df: pd.DataFrame, cols):
-    """Coerce listed columns to numeric by stripping non-numeric characters and using to_numeric."""
+    """Coerce specified columns to numeric. Strips common non-numeric characters like currency symbols and commas."""
+    if not isinstance(cols, (list, tuple)):
+        cols = [cols]
+
+    def clean_value(x):
+        if pd.isna(x):
+            return x
+        if isinstance(x, (int, float)):
+            return x
+        s = str(x).strip()
+        # Remove common currency symbols and grouping
+        for token in [",", "$", "€", "£", "₹", "¥", "RM", "%"]:
+            s = s.replace(token, "")
+        # Keep only digits, sign, dot, and exponent markers
+        cleaned = []
+        valid = set("0123456789.-+eE")
+        for ch in s:
+            if ch in valid:
+                cleaned.append(ch)
+        s = "".join(cleaned)
+        return s if s != "" else None
+
     for c in cols:
         if c in df.columns:
-            # Convert to string, strip non-numeric (keep digits, . - and scientific notation e/E)
-            df[c] = pd.to_numeric(
-                df[c].astype(str).str.replace(r"[^0-9eE+\-\.]", "", regex=True),
-                errors="coerce",
-            )
+            df[c] = df[c].map(clean_value)
+            df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
 
 def coerce_datetime(df: pd.DataFrame, cols):
-    """Coerce listed columns to datetime with errors coerced to NaT."""
+    """Coerce specified columns to datetime."""
+    if not isinstance(cols, (list, tuple)):
+        cols = [cols]
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
     return df
 
 
-def safe_altair_chart(chart_builder_callable):
-    """
-    Execute chart builder inside try/except. The builder should return (chart, fallback_df).
-    On any exception or if chart is None, show a warning and display fallback_df instead.
-    """
+def safe_altair_chart(chart_builder_callable, fallback_df: pd.DataFrame):
+    """Execute builder to get an Altair chart and render it safely; on any error, show a warning and the fallback table."""
     try:
-        result = chart_builder_callable()
-        if isinstance(result, tuple) and len(result) == 2:
-            chart, fallback_df = result
-        else:
-            chart, fallback_df = result, None
-
+        chart = chart_builder_callable()
         if chart is None:
             st.warning("Chart unavailable")
-            if isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
-                st.dataframe(fallback_df, use_container_width=True)
+            st.dataframe(fallback_df)
             return
-
-        st.altair_chart(chart, use_container_width=True)
+        try:
+            st.altair_chart(chart, use_container_width=True)
+        except Exception:
+            st.warning("Chart unavailable")
+            st.dataframe(fallback_df)
     except Exception:
         st.warning("Chart unavailable")
-        try:
-            # Attempt to fetch fallback again in case builder returned it
-            result = chart_builder_callable()
-            if isinstance(result, tuple) and len(result) == 2:
-                _, fallback_df = result
-                if isinstance(fallback_df, pd.DataFrame) and not fallback_df.empty:
-                    st.dataframe(fallback_df, use_container_width=True)
-        except Exception:
-            pass
+        st.dataframe(fallback_df)
 
 
-# -----------------------------
-# Embedded report data (provided JSON)
-# -----------------------------
-report_data = {
-    "valid": True,
-    "issues": [],
-    "summary": [
-        "Total sales and registered users are shown for each of the past 6 months.",
-        "Sales peaked in June 2025 at 138,457.02, then declined sharply by September 2025.",
-        "Registered users followed a similar trend, peaking in June 2025 at 1,491 and dropping to 194 by September 2025."
-    ],
-    "tables": [
-        {
-            "name": "Table",
-            "columns": ["month", "total_sales", "registered_users"],
-            "rows": [
-                ["2025-05-01", 110036.75999999886, "1096"],
-                ["2025-06-01", 138457.01999999848, "1491"],
-                ["2025-07-01", 101228.30999999943, "1036"],
-                ["2025-08-01", 90910.37999999947, "762"],
-                ["2025-09-01", 18826.00999999998, "194"]
-            ]
-        }
-    ],
-    "charts": [
-        {
-            "id": "sales_users_trend",
-            "type": "line",
-            "spec": {
-                "xKey": "month",
-                "yKey": "value",
-                "series": [
-                    {"name": "total_sales", "yKey": "total_sales"},
-                    {"name": "registered_users", "yKey": "registered_users"}
-                ]
-            }
-        }
-    ],
-    "echo": {
-        "intent": "trend",
-        "used": {"tables": ["detail"], "columns": ["month", "total_sales", "registered_users"]},
-        "stats": {"elapsed": 0},
-        "sql_present": False
-    }
-}
-
-
-# -----------------------------
-# Main App Renderer
-# -----------------------------
+# ---------------------- App Renderer ----------------------
 
 def render_app():
-    # Page config guard to avoid duplicate set on reruns/imports
-    if not st.session_state.get("_page_config_set", False):
+    # Guard page config for multi-import contexts
+    if not st.session_state.get("_page_configured", False):
         st.set_page_config(page_title="AI Report", layout="wide")
-        st.session_state["_page_config_set"] = True
+        st.session_state["_page_configured"] = True
 
     alt.data_transformers.disable_max_rows()
 
+    # The provided JSON report
+    report = {
+        "valid": True,
+        "issues": [],
+        "summary": [
+            "Total sales for the past 6 months: 538,181.64",
+            "Total registered users for the past 6 months: 4,592"
+        ],
+        "tables": [
+            {
+                "name": "Table",
+                "columns": ["total_sales", "registered_users"],
+                "rows": [
+                    [538181.6399999999, "4592"]
+                ]
+            }
+        ],
+        "charts": [
+            {
+                "id": "main",
+                "type": "kpi",
+                "spec": {
+                    "xKey": "Metric",
+                    "yKey": "Value",
+                    "series": [
+                        {"name": "Total Sales", "yKey": "total_sales"},
+                        {"name": "Registered Users", "yKey": "registered_users"}
+                    ]
+                }
+            }
+        ],
+        "echo": {
+            "intent": "comparison_totals",
+            "used": {"tables": [], "columns": ["total_sales", "registered_users"]},
+            "stats": {"elapsed": 0},
+            "sql_present": False
+        }
+    }
+
+    # Title
     st.title("AI Report")
 
-    # Summary Section
-    summaries = report_data.get("summary", [])
-    if summaries:
-        st.subheader("Summary")
-        for s in summaries:
-            st.markdown(f"- {s}")
+    # Summary
+    st.subheader("Summary")
+    if report.get("summary"):
+        for item in report["summary"]:
+            st.markdown(f"- {item}")
+    else:
+        st.write("No summary available.")
 
-    # Load Tables
+    # Tables
     st.subheader("Tables")
-    table_entries = report_data.get("tables", [])
-    table_dfs = []
-    for idx, t in enumerate(table_entries):
-        name = t.get("name") or f"Table {idx+1}"
+    if report.get("tables"):
+        for t in report["tables"]:
+            name = t.get("name") or "Table"
+            cols = t.get("columns", [])
+            rows = t.get("rows", [])
+            try:
+                df = pd.DataFrame(rows, columns=cols)
+            except Exception:
+                # Fallback if rows malformed
+                df = pd.DataFrame(rows)
+            st.markdown(f"**{name}**")
+            st.dataframe(df)
+    else:
+        st.write("No tables available.")
+
+    # Helper: collect first-row values across tables for quick lookup
+    value_lookup = {}
+    for t in report.get("tables", []):
         cols = t.get("columns", [])
         rows = t.get("rows", [])
-        try:
-            df = pd.DataFrame(rows, columns=cols)
-        except Exception:
-            df = pd.DataFrame(rows)
-        st.markdown(f"**{name}**")
-        st.dataframe(df, use_container_width=True)
-        table_dfs.append((name, df))
+        if rows and cols and len(rows[0]) == len(cols):
+            first = rows[0]
+            for i, c in enumerate(cols):
+                value_lookup[c] = first[i]
 
-    # Helper to get the primary DataFrame for charts (use first table if present)
-    base_df = table_dfs[0][1] if table_dfs else pd.DataFrame()
+    # Charts
+    st.subheader("Charts")
+    charts = report.get("charts", [])
 
-    # Charts Section
-    charts = report_data.get("charts", [])
-    if charts:
-        st.subheader("Charts")
+    if not charts:
+        st.write("No charts available.")
+        return
 
     for ch in charts:
-        ch_type = (ch.get("type") or "").lower()
-        ch_id = ch.get("id", "Chart")
-        spec = ch.get("spec", {})
+        chart_id = ch.get("id", "chart")
+        chart_type = (ch.get("type") or "").lower()
+        st.markdown(f"**Chart: {chart_id}**")
 
-        st.markdown(f"**{ch_id}**")
+        if chart_type == "kpi":
+            spec = ch.get("spec", {})
+            series = spec.get("series", [])
 
-        if base_df.empty:
-            st.warning("Chart unavailable")
-            continue
+            # Build a small DataFrame with Metric/Value from the series list
+            rows = []
+            for s in series:
+                y_key = s.get("yKey")
+                name = s.get("name") or (y_key or "")
+                if y_key in value_lookup:
+                    rows.append({"Metric": name, "Value": value_lookup.get(y_key)})
 
-        # Sanitize and prepare data for charting
-        df_sanitized, mapping = sanitize_columns(base_df)
+            if not rows:
+                st.warning("Chart unavailable")
+                st.dataframe(pd.DataFrame(columns=["Metric", "Value"]))
+                continue
 
-        # Builder for a line chart with optional multiple series
-        if ch_type == "line":
-            def builder():
-                x_key_raw = spec.get("xKey")
-                series = spec.get("series", [])
-                # Map original keys to sanitized
-                x_col = mapping.get(x_key_raw, None)
-                y_cols = []
-                legend_names = []
-                for s in series:
-                    y_raw = s.get("yKey")
-                    if y_raw in mapping:
-                        y_cols.append(mapping[y_raw])
-                        legend_names.append(y_raw)
+            kpi_df = pd.DataFrame(rows)
+            kpi_sanitized, cmap = sanitize_columns(kpi_df)
+            metric_col = cmap.get("Metric", "metric")
+            value_col = cmap.get("Value", "value")
 
-                # Validate presence of required columns
-                if not x_col or x_col not in df_sanitized.columns:
-                    raise ValueError("X column missing for chart")
-                if not y_cols:
-                    raise ValueError("No valid Y series for chart")
+            # Coerce value to numeric
+            coerce_numeric(kpi_sanitized, [value_col])
 
-                # Coerce types
-                coerce_datetime(df_sanitized, [x_col])
-                coerce_numeric(df_sanitized, y_cols)
+            # Filter to non-null rows for both fields
+            kpi_valid = kpi_sanitized.copy()
+            if metric_col not in kpi_valid.columns or value_col not in kpi_valid.columns:
+                st.warning("Chart unavailable")
+                st.dataframe(kpi_sanitized)
+                continue
 
-                # Prepare long format for Altair (metric, value)
-                cols_for_melt = [x_col] + y_cols
-                df_long = pd.melt(
-                    df_sanitized[cols_for_melt].copy(),
-                    id_vars=[x_col],
-                    value_vars=y_cols,
-                    var_name="metric",
-                    value_name="value",
-                )
+            kpi_valid = kpi_valid[kpi_valid[metric_col].notna() & kpi_valid[value_col].notna()]
+            if kpi_valid.empty:
+                st.warning("Chart unavailable")
+                st.dataframe(kpi_sanitized)
+                continue
 
-                # Optionally map sanitized metric names back to original for legend readability
-                # Create inverse mapping from safe -> original
-                inv_map = {v: k for k, v in mapping.items()}
-                df_long["metric"] = df_long["metric"].map(lambda m: inv_map.get(m, m))
-
-                # Drop NaNs
-                df_long = df_long.dropna(subset=[x_col, "value"]).copy()
-
-                # Ensure we have at least one valid row
-                if df_long.empty:
-                    raise ValueError("No data rows available for chart after coercion")
-
-                # Determine x encoding type
-                x_encoding = alt.X(f"{x_col}:T", title=x_key_raw if x_key_raw else x_col)
-
+            def build_chart():
                 chart = (
-                    alt.Chart(df_long)
-                    .mark_line(point=True)
-                    .encode(
-                        x=x_encoding,
-                        y=alt.Y("value:Q", title="Value"),
-                        color=alt.Color("metric:N", title="Metric"),
-                        tooltip=[
-                            alt.Tooltip(f"{x_col}:T", title=x_key_raw if x_key_raw else x_col),
-                            alt.Tooltip("metric:N", title="Metric"),
-                            alt.Tooltip("value:Q", title="Value"),
-                        ],
-                    )
-                )
-                chart = chart.properties(height=380)
-                return chart, df_sanitized
-
-            safe_altair_chart(builder)
-
-        # Basic bar/area/pie handlers if ever present in input (defensive, though not used here)
-        elif ch_type == "bar":
-            def builder():
-                x_key_raw = spec.get("xKey")
-                y_key_raw = spec.get("yKey")
-                x_col = mapping.get(x_key_raw, None)
-                y_col = mapping.get(y_key_raw, None)
-                if not x_col or x_col not in df_sanitized.columns:
-                    raise ValueError("X column missing for bar chart")
-                if not y_col or y_col not in df_sanitized.columns:
-                    raise ValueError("Y column missing for bar chart")
-                coerce_datetime(df_sanitized, [x_col])
-                coerce_numeric(df_sanitized, [y_col])
-                df_plot = df_sanitized[[x_col, y_col]].dropna()
-                if df_plot.empty:
-                    raise ValueError("No data rows available for bar chart after coercion")
-                # If datetime-like, treat as temporal; else nominal
-                if pd.api.types.is_datetime64_any_dtype(df_plot[x_col]):
-                    x_enc = alt.X(f"{x_col}:T", title=x_key_raw)
-                else:
-                    x_enc = alt.X(f"{x_col}:N", title=x_key_raw)
-                chart = (
-                    alt.Chart(df_plot)
+                    alt.Chart(kpi_valid)
                     .mark_bar()
                     .encode(
-                        x=x_enc,
-                        y=alt.Y(f"{y_col}:Q", title=y_key_raw),
-                        tooltip=[
-                            alt.Tooltip(f"{x_col}:{'T' if pd.api.types.is_datetime64_any_dtype(df_plot[x_col]) else 'N'}", title=x_key_raw),
-                            alt.Tooltip(f"{y_col}:Q", title=y_key_raw),
-                        ],
+                        x=alt.X(metric_col, type="nominal", title="Metric"),
+                        y=alt.Y(value_col, type="quantitative", title="Value"),
+                        color=alt.Color(metric_col, type="nominal", legend=None),
+                        tooltip=[metric_col, value_col],
                     )
                 )
-                return chart, df_sanitized
-            safe_altair_chart(builder)
+                return chart.properties(height=300)
 
-        elif ch_type == "area":
-            def builder():
-                x_key_raw = spec.get("xKey")
-                y_key_raw = spec.get("yKey")
-                x_col = mapping.get(x_key_raw, None)
-                y_col = mapping.get(y_key_raw, None)
-                if not x_col or x_col not in df_sanitized.columns:
-                    raise ValueError("X column missing for area chart")
-                if not y_col or y_col not in df_sanitized.columns:
-                    raise ValueError("Y column missing for area chart")
-                coerce_datetime(df_sanitized, [x_col])
-                coerce_numeric(df_sanitized, [y_col])
-                df_plot = df_sanitized[[x_col, y_col]].dropna()
-                if df_plot.empty:
-                    raise ValueError("No data rows available for area chart after coercion")
-                if pd.api.types.is_datetime64_any_dtype(df_plot[x_col]):
-                    x_enc = alt.X(f"{x_col}:T", title=x_key_raw)
-                else:
-                    x_enc = alt.X(f"{x_col}:N", title=x_key_raw)
-                chart = (
-                    alt.Chart(df_plot)
-                    .mark_area()
-                    .encode(
-                        x=x_enc,
-                        y=alt.Y(f"{y_col}:Q", title=y_key_raw),
-                        tooltip=[
-                            alt.Tooltip(f"{x_col}:{'T' if pd.api.types.is_datetime64_any_dtype(df_plot[x_col]) else 'N'}", title=x_key_raw),
-                            alt.Tooltip(f"{y_col}:Q", title=y_key_raw),
-                        ],
-                    )
-                )
-                return chart, df_sanitized
-            safe_altair_chart(builder)
-
-        elif ch_type in ("pie", "donut", "arc"):
-            def builder():
-                dim_raw = spec.get("categoryKey") or spec.get("xKey")
-                val_raw = spec.get("valueKey") or spec.get("yKey")
-                dim_col = mapping.get(dim_raw, None)
-                val_col = mapping.get(val_raw, None)
-                if not dim_col or dim_col not in df_sanitized.columns:
-                    raise ValueError("Category column missing for pie chart")
-                if not val_col or val_col not in df_sanitized.columns:
-                    raise ValueError("Value column missing for pie chart")
-                coerce_numeric(df_sanitized, [val_col])
-                df_plot = df_sanitized[[dim_col, val_col]].dropna()
-                if df_plot.empty:
-                    raise ValueError("No data rows available for pie chart after coercion")
-                chart = (
-                    alt.Chart(df_plot)
-                    .mark_arc()
-                    .encode(
-                        theta=alt.Theta(f"{val_col}:Q", stack=True),
-                        color=alt.Color(f"{dim_col}:N", title=dim_raw),
-                        tooltip=[
-                            alt.Tooltip(f"{dim_col}:N", title=dim_raw),
-                            alt.Tooltip(f"{val_col}:Q", title=val_raw),
-                        ],
-                    )
-                )
-                chart = chart.properties(height=380)
-                return chart, df_sanitized
-            safe_altair_chart(builder)
-
+            safe_altair_chart(build_chart, kpi_sanitized)
         else:
-            st.warning("Unsupported chart type; showing data table instead.")
-            st.dataframe(df_sanitized, use_container_width=True)
+            # Unsupported chart type; warn and show available data context
+            st.warning("Chart unavailable")
+            # Show a combined view of first table (if available) for context
+            if report.get("tables"):
+                t0 = report["tables"][0]
+                try:
+                    df0 = pd.DataFrame(t0.get("rows", []), columns=t0.get("columns", []))
+                except Exception:
+                    df0 = pd.DataFrame(t0.get("rows", []))
+                st.dataframe(df0)
+            else:
+                st.dataframe(pd.DataFrame())
 
 
-# The module is import-safe; nothing runs on import. Call render_app() from your Streamlit entrypoint.
+# Note: This module exposes render_app() and does not execute on import.

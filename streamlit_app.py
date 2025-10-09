@@ -1,383 +1,333 @@
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 import altair as alt
 
-# ------------------------------------------------------------
-# Utilities
-# ------------------------------------------------------------
 
+# ----------------------- Utilities -----------------------
 def sanitize_columns(df: pd.DataFrame):
     """
-    Return a copy of df with sanitized, Altair-safe column names and a mapping
-    from original -> safe names. Safe names are lower_snake_case with only
-    [A-Za-z0-9_]. Ensures uniqueness.
+    Return a copy of df with sanitized, safe column names and a mapping from original->safe.
+    Safe names: lower_snake_case using only [A-Za-z0-9_]. Ensures uniqueness.
     """
-    import re
-
-    def to_safe(name: str) -> str:
-        s = str(name)
-        s = s.lower()
-        s = re.sub(r"[^a-z0-9_]+", "_", s)
-        s = re.sub(r"_+", "_", s).strip("_")
-        if s == "":
-            s = "col"
-        return s
-
     original_cols = list(df.columns)
     safe_cols = []
+    mapping = {}
+
+    def to_safe(name: str) -> str:
+        # lower, replace non-alnum with underscore, collapse repeats
+        s = name.lower()
+        s = ''.join(ch if ch.isalnum() else '_' for ch in s)
+        # collapse multiple underscores
+        while '__' in s:
+            s = s.replace('__', '_')
+        # strip leading/trailing underscores
+        s = s.strip('_')
+        # fall back if empty
+        if not s:
+            s = 'col'
+        return s
+
     used = {}
-    for c in original_cols:
-        base = to_safe(c)
+    for col in original_cols:
+        base = to_safe(str(col))
         candidate = base
         idx = 1
         while candidate in used:
             idx += 1
             candidate = f"{base}_{idx}"
-        used[candidate] = c
+        used[candidate] = True
+        mapping[col] = candidate
         safe_cols.append(candidate)
 
-    mapping = {orig: safe for orig, safe in zip(original_cols, safe_cols)}
-    df_copy = df.copy()
-    df_copy.columns = safe_cols
-    return df_copy, mapping
+    df_safe = df.copy()
+    df_safe.columns = safe_cols
+    return df_safe, mapping
 
 
 def coerce_numeric(df: pd.DataFrame, cols):
-    """
-    Coerce specified columns to numeric by stripping non-numeric characters.
-    Non-convertible values become NaN.
-    """
+    """Coerce specified columns to numeric, stripping common non-numeric characters."""
     for col in cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(r"[^0-9.\-]", "", regex=True),
-                errors="coerce",
-            )
+            # Convert values to strings and keep only digits, sign, decimal point, exponent
+            def clean_val(v):
+                if pd.isna(v):
+                    return v
+                s = str(v)
+                # fast path: if already numeric-like, keep
+                # Otherwise, strip unwanted characters
+                kept = []
+                for ch in s:
+                    if ch.isdigit() or ch in ['.', '-', 'e', 'E']:
+                        kept.append(ch)
+                s2 = ''.join(kept)
+                # If empty after cleaning, return NaN
+                return s2 if s2 not in (None, '') else None
+            df[col] = pd.to_numeric(df[col].map(clean_val), errors='coerce')
     return df
 
 
 def coerce_datetime(df: pd.DataFrame, cols):
-    """Coerce specified columns to datetime; non-convertible values become NaT."""
+    """Coerce specified columns to datetime where possible."""
     for col in cols:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
+            df[col] = pd.to_datetime(df[col], errors='coerce')
     return df
 
 
-def safe_altair_chart(chart_builder_callable):
+def safe_altair_chart(chart_builder_callable, fallback_df: pd.DataFrame, warning_message: str = "Chart unavailable"):
     """
-    Executes the provided chart builder in a try/except. The builder may return:
-      - an Altair Chart object, or
-      - a tuple (chart, fallback_df)
-    On exception or None chart, shows a warning and, if provided, shows fallback_df as a table.
-    Returns True if chart rendered, False otherwise.
+    Executes chart_builder_callable() inside try/except; on failure, warns and shows fallback_df.
+    chart_builder_callable should return an Altair chart object.
     """
     try:
-        result = chart_builder_callable()
-        chart = result
-        fallback_df = None
-        if isinstance(result, tuple) and len(result) == 2:
-            chart, fallback_df = result
+        chart = chart_builder_callable()
         if chart is None:
-            st.warning("Chart unavailable")
-            if fallback_df is not None and isinstance(fallback_df, pd.DataFrame):
-                st.dataframe(fallback_df)
-            return False
+            raise ValueError("Chart builder returned None")
         st.altair_chart(chart, use_container_width=True)
-        return True
     except Exception:
-        st.warning("Chart unavailable")
-        try:
-            result = chart_builder_callable()
-            if isinstance(result, tuple) and len(result) == 2:
-                _, fallback_df = result
-                if fallback_df is not None and isinstance(fallback_df, pd.DataFrame):
-                    st.dataframe(fallback_df)
-        except Exception:
-            pass
-        return False
+        st.warning(warning_message)
+        st.dataframe(fallback_df)
 
 
-# ------------------------------------------------------------
-# Embedded report data (from the provided JSON)
-# ------------------------------------------------------------
-
-def get_report():
-    return {
-        "valid": True,
-        "issues": [],
-        "summary": [
-            "Total sales increased from 259,402 in 2024 Q1 to a peak of 463,267 in 2025 Q1, then declined to 210,965 by 2025 Q3.",
-            "Quarterly sales growth was strong in 2024 Q4 (+49.7%) and 2025 Q1 (+3.2%), but dropped sharply in 2025 Q2 (-19.9%) and 2025 Q3 (-43.1%).",
-            "Total units sold followed a similar trend, peaking at 19,670 in 2025 Q1 before declining.",
-            "Purchases and buyers both peaked in 2024 Q4 and 2025 Q1, then declined in subsequent quarters.",
-            "Registered purchasers always matched buyers, indicating all buyers were registered.",
-        ],
-        "tables": [
-            {
-                "name": "Quarterly Sales Report 2024-2025",
-                "columns": [
-                    "period",
-                    "total_sales",
-                    "total_units",
-                    "purchases",
-                    "buyers",
-                    "registered_purchasers",
-                ],
-                "rows": [
-                    ["2024 Q1", 259402.10999999472, "9002", "3702", "2579", "2579"],
-                    ["2024 Q2", 299314.9499999972, "9713", "5281", "3055", "3055"],
-                    ["2024 Q3", 300075.42999999237, "13323", "8402", "2494", "2494"],
-                    ["2024 Q4", 448770.4200000053, "18388", "10060", "5245", "5245"],
-                    ["2025 Q1", 463266.6000000094, "19670", "9913", "4999", "4998"],
-                    ["2025 Q2", 371077.9300000016, "15482", "9008", "3826", "3826"],
-                    ["2025 Q3", 210964.6999999934, "8576", "5689", "1711", "1711"],
-                ],
+# ----------------------- Report Data -----------------------
+REPORT = {
+    "valid": True,
+    "issues": [],
+    "summary": [
+        "Total sales peaked in 2025 Q1 at 463,266.60, with a significant increase from 2024 Q4 (448,770.42).",
+        "Registered purchasers and buyers followed similar trends, peaking in 2024 Q4 and 2025 Q1, then declining sharply in 2025 Q3.",
+        "Total units sold and number of purchases also peaked in 2025 Q1, indicating strong demand before a notable drop in 2025 Q2 and Q3.",
+        "2024 Q4 and 2025 Q1 were periods of highest activity across all metrics, suggesting seasonal or campaign-driven spikes.",
+        "2025 Q3 saw the lowest figures across all metrics, with total sales dropping to 210,964.70 and registered purchasers down to 1,711."
+    ],
+    "tables": [
+        {
+            "name": "Quarterly Sales Data 2024-2025",
+            "columns": ["period", "registered_purchasers", "total_sales", "total_units", "purchases", "buyers"],
+            "rows": [
+                ["2024 Q1", 2579, 259402.10999999472, "9002", 3702, 2579],
+                ["2024 Q2", 3055, 299314.9499999972, "9713", 5281, 3055],
+                ["2024 Q3", 2494, 300075.42999999237, "13323", 8402, 2494],
+                ["2024 Q4", 5245, 448770.4200000053, "18388", 10060, 5245],
+                ["2025 Q1", 4998, 463266.6000000094, "19670", 9913, 4999],
+                ["2025 Q2", 3826, 371077.9300000016, "15482", 9008, 3826],
+                ["2025 Q3", 1711, 210964.6999999934, "8576", 5689, 1711]
+            ]
+        }
+    ],
+    "charts": [
+        {
+            "id": "sales_trend",
+            "type": "line",
+            "spec": {
+                "xKey": "period",
+                "yKey": "total_sales",
+                "series": [
+                    {"name": "Total Sales", "yKey": "total_sales"}
+                ]
             }
-        ],
-        "charts": [
-            {
-                "id": "sales_trend",
-                "type": "line",
-                "spec": {
-                    "xKey": "period",
-                    "yKey": "total_sales",
-                    "series": [{"name": "Total Sales", "yKey": "total_sales"}],
-                },
-            },
-            {
-                "id": "units_trend",
-                "type": "line",
-                "spec": {
-                    "xKey": "period",
-                    "yKey": "total_units",
-                    "series": [{"name": "Total Units", "yKey": "total_units"}],
-                },
-            },
-            {
-                "id": "purchases_buyers_trend",
-                "type": "groupedBar",
-                "spec": {
-                    "xKey": "period",
-                    "yKey": "value",
-                    "series": [
-                        {"name": "Purchases", "yKey": "purchases"},
-                        {"name": "Buyers", "yKey": "buyers"},
-                    ],
-                },
-            },
-        ],
-        "echo": {
-            "intent": "trend",
-            "used": {
-                "tables": ["Quarterly Sales Report 2024-2025"],
-                "columns": [
-                    "period",
-                    "total_sales",
-                    "total_units",
-                    "purchases",
-                    "buyers",
-                    "registered_purchasers",
-                ],
-            },
-            "stats": {"elapsed": 0},
-            "sql_present": False,
         },
-    }
+        {
+            "id": "purchasers_trend",
+            "type": "line",
+            "spec": {
+                "xKey": "period",
+                "yKey": "registered_purchasers",
+                "series": [
+                    {"name": "Registered Purchasers", "yKey": "registered_purchasers"}
+                ]
+            }
+        },
+        {
+            "id": "units_trend",
+            "type": "line",
+            "spec": {
+                "xKey": "period",
+                "yKey": "total_units",
+                "series": [
+                    {"name": "Total Units", "yKey": "total_units"}
+                ]
+            }
+        },
+        {
+            "id": "purchases_trend",
+            "type": "line",
+            "spec": {
+                "xKey": "period",
+                "yKey": "purchases",
+                "series": [
+                    {"name": "Purchases", "yKey": "purchases"}
+                ]
+            }
+        },
+        {
+            "id": "buyers_trend",
+            "type": "line",
+            "spec": {
+                "xKey": "period",
+                "yKey": "buyers",
+                "series": [
+                    {"name": "Buyers", "yKey": "buyers"}
+                ]
+            }
+        }
+    ]
+}
 
 
-# ------------------------------------------------------------
-# Main render function
-# ------------------------------------------------------------
-
+# ----------------------- App Renderer -----------------------
 def render_app():
-    # Avoid multiple reconfiguration under Streamlit reruns/imports
-    if not st.session_state.get("_page_config_set", False):
+    # Prevent page config being set multiple times in environments where render_app could be re-run.
+    if "_page_config_set" not in st.session_state:
         st.set_page_config(page_title="AI Report", layout="wide")
         st.session_state["_page_config_set"] = True
 
-    # Avoid Altair row-limit issues
+    # Altair settings to avoid row-limit issues
     alt.data_transformers.disable_max_rows()
-
-    report = get_report()
 
     st.title("AI Report")
 
-    # Summary section
-    summaries = report.get("summary", [])
-    if summaries:
+    # Summary Section
+    if REPORT.get("summary"):
         st.subheader("Summary")
-        for item in summaries:
+        for item in REPORT["summary"]:
             st.markdown(f"- {item}")
 
-    # Tables section
-    st.subheader("Tables")
-    tables = report.get("tables", [])
-    dataframes_by_name = {}
-    for t in tables:
-        name = t.get("name", "Table")
-        cols = t.get("columns", [])
-        rows = t.get("rows", [])
-        try:
-            df = pd.DataFrame(rows, columns=cols)
-        except Exception:
-            df = pd.DataFrame(rows)
-        dataframes_by_name[name] = df
-        st.markdown(f"#### {name}")
-        st.dataframe(df)
+    # Tables Section
+    table_dfs = []
+    if REPORT.get("tables"):
+        for table in REPORT["tables"]:
+            name = table.get("name", "Table")
+            cols = table.get("columns", [])
+            rows = table.get("rows", [])
+            try:
+                df = pd.DataFrame(rows, columns=cols)
+            except Exception:
+                df = pd.DataFrame(rows)
+            table_dfs.append((name, df))
 
-    # Determine main DataFrame for charts
-    used_table_names = report.get("echo", {}).get("used", {}).get("tables", [])
-    main_table_name = used_table_names[0] if used_table_names else (tables[0]["name"] if tables else None)
-    main_df = dataframes_by_name.get(main_table_name) if main_table_name in dataframes_by_name else (list(dataframes_by_name.values())[0] if dataframes_by_name else pd.DataFrame())
+        for name, df in table_dfs:
+            st.subheader(name)
+            st.dataframe(df)
 
-    # Prepare sanitized and coerced data for charting
-    sdf, mapping = sanitize_columns(main_df)
-
-    # Helper to map original -> safe column name
-    def safe_col(orig_name: str):
-        return mapping.get(orig_name, orig_name if orig_name in sdf.columns else None)
-
-    # Infer numeric columns (all except potential dimension columns like 'period')
-    potential_numeric = [c for c in sdf.columns if c != safe_col("period")]
-    coerce_numeric(sdf, potential_numeric)
-    # We keep 'period' as nominal, not coercing to datetime due to quarter format
-
+    # Charts Section
     st.subheader("Charts")
 
-    # 1) Sales Trend (line chart)
-    st.markdown("#### Sales Trend")
-    def build_sales_trend():
-        spec = None
-        for ch in report.get("charts", []):
-            if ch.get("id") == "sales_trend":
-                spec = ch.get("spec", {})
-                break
-        x_key = spec.get("xKey", "period") if spec else "period"
-        y_key = spec.get("yKey", "total_sales") if spec else "total_sales"
-        x_safe = safe_col(x_key)
-        y_safe = safe_col(y_key)
-        if x_safe is None or y_safe is None:
-            return None, sdf
-        # Ensure there is data
-        sdf_filtered = sdf[[x_safe, y_safe]].copy()
-        sdf_filtered = sdf_filtered.dropna(subset=[x_safe, y_safe])
-        if sdf_filtered[y_safe].notna().sum() < 1:
-            return None, sdf
-        try:
-            chart = (
-                alt.Chart(sdf_filtered)
-                .mark_line(point=True)
-                .encode(
-                    x=alt.X(f"{x_safe}:N", title=x_key),
-                    y=alt.Y(f"{y_safe}:Q", title=y_key),
-                    tooltip=[x_safe, y_safe],
-                )
+    # Build a lookup of sanitized dataframes per original table name
+    sanitized_tables = {}
+    for name, df in table_dfs:
+        df_safe, mapping = sanitize_columns(df)
+        sanitized_tables[name] = (df, df_safe, mapping)
+
+    # Helper to get sanitized column name from original
+    def get_safe(mapping, original_name):
+        return mapping.get(original_name, original_name)
+
+    # Attempt to draw charts from the first (and only) table by default
+    base_table_name = table_dfs[0][0] if table_dfs else None
+
+    if REPORT.get("charts") and base_table_name and base_table_name in sanitized_tables:
+        original_df, safe_df, col_map = sanitized_tables[base_table_name]
+
+        # Identify numeric columns to coerce based on known fields in the report
+        numeric_original_cols = [
+            "registered_purchasers",
+            "total_sales",
+            "total_units",
+            "purchases",
+            "buyers",
+        ]
+        numeric_safe_cols = [get_safe(col_map, c) for c in numeric_original_cols if get_safe(col_map, c) in safe_df.columns]
+        safe_df = coerce_numeric(safe_df, numeric_safe_cols)
+        # We won't coerce 'period' to datetime since it's a quarter label; keep nominal.
+
+        for chart in REPORT["charts"]:
+            ctype = chart.get("type", "bar")
+            spec = chart.get("spec", {})
+            x_key = spec.get("xKey")
+            y_key = spec.get("yKey")
+            if not x_key or not y_key:
+                st.warning("Chart spec missing x or y key; displaying table instead.")
+                st.dataframe(safe_df)
+                continue
+
+            x_safe = get_safe(col_map, x_key)
+            y_safe = get_safe(col_map, y_key)
+
+            # Builder function for safe_altair_chart
+            def make_builder(df_ref: pd.DataFrame, x_col: str, y_col: str, title: str):
+                def builder():
+                    # Validate columns exist
+                    if x_col not in df_ref.columns or y_col not in df_ref.columns:
+                        raise ValueError("Required columns not found for chart")
+
+                    # Ensure at least one valid row for x and y
+                    plot_df = df_ref[[x_col, y_col]].copy()
+                    # Drop rows with NaN in y
+                    plot_df = plot_df.dropna(subset=[x_col, y_col])
+                    if plot_df.shape[0] == 0:
+                        raise ValueError("No valid data points for chart")
+
+                    # Decide x encoding type: temporal if datetime dtype, else nominal
+                    if pd.api.types.is_datetime64_any_dtype(plot_df[x_col]):
+                        x_enc = alt.X(f"{x_col}:T", title=x_key)
+                        tooltip_x = alt.Tooltip(f"{x_col}:T", title=x_key)
+                    else:
+                        x_enc = alt.X(f"{x_col}:N", sort=None, title=x_key)
+                        tooltip_x = alt.Tooltip(f"{x_col}:N", title=x_key)
+
+                    y_enc = alt.Y(f"{y_col}:Q", title=y_key)
+                    tooltip_y = alt.Tooltip(f"{y_col}:Q", title=y_key)
+
+                    if ctype == "line":
+                        chart_obj = alt.Chart(plot_df).mark_line(point=True).encode(
+                            x=x_enc,
+                            y=y_enc,
+                            tooltip=[tooltip_x, tooltip_y],
+                        )
+                    elif ctype == "area":
+                        chart_obj = alt.Chart(plot_df).mark_area().encode(
+                            x=x_enc,
+                            y=y_enc,
+                            tooltip=[tooltip_x, tooltip_y],
+                        )
+                    elif ctype == "bar":
+                        chart_obj = alt.Chart(plot_df).mark_bar().encode(
+                            x=x_enc,
+                            y=y_enc,
+                            tooltip=[tooltip_x, tooltip_y],
+                        )
+                    elif ctype == "pie":
+                        # Implement simple pie via arc: expects y as value, x as category (optional)
+                        theta_field = y_col
+                        color_field = x_col if x_col in plot_df.columns else None
+                        enc = {
+                            'theta': alt.Theta(f"{theta_field}:Q"),
+                        }
+                        if color_field is not None:
+                            enc['color'] = alt.Color(f"{color_field}:N")
+                        chart_obj = alt.Chart(plot_df).mark_arc().encode(**enc)
+                    else:
+                        # default to bar if unknown
+                        chart_obj = alt.Chart(plot_df).mark_bar().encode(
+                            x=x_enc,
+                            y=y_enc,
+                            tooltip=[tooltip_x, tooltip_y],
+                        )
+
+                    return chart_obj.properties(title=title)
+
+                return builder
+
+            title = f"{y_key.replace('_', ' ').title()} over {x_key.replace('_', ' ').title()}"
+            safe_altair_chart(
+                make_builder(safe_df, x_safe, y_safe, title),
+                fallback_df=safe_df,
+                warning_message="Chart unavailable"
             )
-            chart = chart.properties(title=None)
-            return chart, sdf_filtered
-        except Exception:
-            return None, sdf
-
-    safe_altair_chart(build_sales_trend)
-
-    # 2) Units Trend (line chart)
-    st.markdown("#### Units Trend")
-    def build_units_trend():
-        spec = None
-        for ch in report.get("charts", []):
-            if ch.get("id") == "units_trend":
-                spec = ch.get("spec", {})
-                break
-        x_key = spec.get("xKey", "period") if spec else "period"
-        y_key = spec.get("yKey", "total_units") if spec else "total_units"
-        x_safe = safe_col(x_key)
-        y_safe = safe_col(y_key)
-        if x_safe is None or y_safe is None:
-            return None, sdf
-        sdf_filtered = sdf[[x_safe, y_safe]].copy()
-        sdf_filtered = sdf_filtered.dropna(subset=[x_safe, y_safe])
-        if sdf_filtered[y_safe].notna().sum() < 1:
-            return None, sdf
-        try:
-            chart = (
-                alt.Chart(sdf_filtered)
-                .mark_line(point=True, color="#1f77b4")
-                .encode(
-                    x=alt.X(f"{x_safe}:N", title=x_key),
-                    y=alt.Y(f"{y_safe}:Q", title=y_key),
-                    tooltip=[x_safe, y_safe],
-                )
-            )
-            chart = chart.properties(title=None)
-            return chart, sdf_filtered
-        except Exception:
-            return None, sdf
-
-    safe_altair_chart(build_units_trend)
-
-    # 3) Purchases vs Buyers (grouped bar)
-    st.markdown("#### Purchases vs Buyers")
-    def build_purchases_buyers():
-        spec = None
-        for ch in report.get("charts", []):
-            if ch.get("id") == "purchases_buyers_trend":
-                spec = ch.get("spec", {})
-                break
-        x_key = (spec or {}).get("xKey", "period")
-        series_list = (spec or {}).get("series", [])
-        # Required columns
-        x_safe = safe_col(x_key)
-        if x_safe is None:
-            return None, sdf
-        required_orig_cols = [s.get("yKey") for s in series_list if isinstance(s, dict) and s.get("yKey")]
-        # Map to safe
-        required_safe_cols = [safe_col(c) for c in required_orig_cols if c is not None]
-        if not required_safe_cols or any(c is None for c in required_safe_cols):
-            return None, sdf
-        # Ensure numeric coercion
-        coerce_numeric(sdf, required_safe_cols)
-        # Melt to long format
-        try:
-            long_df = pd.melt(
-                sdf[[x_safe] + required_safe_cols].copy(),
-                id_vars=[x_safe],
-                value_vars=required_safe_cols,
-                var_name="metric",
-                value_name="value",
-            )
-        except Exception:
-            return None, sdf
-        # Map safe metric names to nicer labels if available from spec
-        safe_to_label = {}
-        for s in series_list:
-            orig = s.get("yKey")
-            label = s.get("name", orig)
-            sc = safe_col(orig)
-            if sc is not None:
-                safe_to_label[sc] = label
-        long_df["series_label"] = long_df["metric"].map(safe_to_label).fillna(long_df["metric"])  # fallback to metric
-        # Drop rows without y
-        long_df = long_df.dropna(subset=["value", x_safe])
-        if long_df["value"].notna().sum() < 1:
-            return None, sdf
-        try:
-            chart = (
-                alt.Chart(long_df)
-                .mark_bar()
-                .encode(
-                    x=alt.X(f"{x_safe}:N", title=x_key),
-                    y=alt.Y("value:Q", title="value"),
-                    color=alt.Color("series_label:N", title="Series"),
-                    tooltip=[x_safe, "series_label", "value"],
-                )
-            )
-            chart = chart.properties(title=None)
-            return chart, long_df
-        except Exception:
-            return None, sdf
-
-    safe_altair_chart(build_purchases_buyers)
+    else:
+        st.info("No chart data available.")
 
 
-# Note: No top-level execution; only render_app() will run the app when called.
+# Note: No top-level execution; render_app() should be called by the runner.
